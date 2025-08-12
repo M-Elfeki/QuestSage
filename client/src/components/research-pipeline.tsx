@@ -4,7 +4,7 @@ import { apiRequest } from "@/lib/queryClient";
 
 interface ResearchPipelineProps {
   sessionId: string | null;
-  onComplete: () => void;
+  onComplete: (data: any) => void;
   onProgress: (progress: number) => void;
 }
 
@@ -30,11 +30,11 @@ export default function ResearchPipeline({ sessionId, onComplete, onProgress }: 
   const deepResearchMutation = useMutation({
     mutationFn: (data: any) => 
       apiRequest("POST", "/api/deep-research", data).then(res => res.json()),
-    onSuccess: () => {
+    onSuccess: (deepData) => {
       setCurrentPhase("complete");
       onProgress(100);
       setTimeout(() => {
-        onComplete();
+        onComplete({ ...researchData, deepResearch: deepData });
       }, 1000);
     }
   });

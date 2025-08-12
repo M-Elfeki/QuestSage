@@ -1,5 +1,5 @@
 export interface SystemConfig {
-  mode: 'mock' | 'real';
+  mode: 'dev' | 'prod';
   maxDialogueRounds: number;
   enabledProviders: {
     openai: boolean;
@@ -31,12 +31,9 @@ export class ConfigService {
     };
   }
 
-  private determineMode(): 'mock' | 'real' {
-    // Check if we have at least one LLM provider and one search provider
-    const hasLLM = !!(process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || process.env.ANTHROPIC_API_KEY);
-    const hasSearch = !!(process.env.GOOGLE_SEARCH_API_KEY || process.env.PERPLEXITY_API_KEY);
-    
-    return hasLLM && hasSearch ? 'real' : 'mock';
+  private determineMode(): 'dev' | 'prod' {
+    // Default to dev mode - user can switch to prod when ready
+    return 'dev';
   }
 
   getConfig(): SystemConfig {
@@ -48,7 +45,11 @@ export class ConfigService {
   }
 
   isRealMode(): boolean {
-    return this.config.mode === 'real';
+    return this.config.mode === 'prod';
+  }
+
+  setMode(mode: 'dev' | 'prod') {
+    this.config.mode = mode;
   }
 
   getMaxRounds(): number {

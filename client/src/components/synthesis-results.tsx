@@ -5,12 +5,18 @@ import { useEffect } from "react";
 
 interface SynthesisResultsProps {
   sessionId: string | null;
+  onComplete?: (synthesis: any) => void;
 }
 
-export default function SynthesisResults({ sessionId }: SynthesisResultsProps) {
+export default function SynthesisResults({ sessionId, onComplete }: SynthesisResultsProps) {
   const synthesizeMutation = useMutation({
     mutationFn: (data: any) => 
-      apiRequest("POST", "/api/synthesize", data).then(res => res.json())
+      apiRequest("POST", "/api/synthesize", data).then(res => res.json()),
+    onSuccess: (data) => {
+      if (onComplete) {
+        onComplete(data);
+      }
+    }
   });
 
   const { data: synthesis } = synthesizeMutation;

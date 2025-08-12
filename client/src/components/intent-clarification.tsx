@@ -54,7 +54,7 @@ export default function IntentClarification({ onContinue }: IntentClarificationP
     );
   }
 
-  if (!clarification) return null;
+  if (!clarification || !clarification.requirements) return null;
 
   return (
     <div className="bg-surface rounded-xl shadow-sm border border-gray-200 p-6">
@@ -79,37 +79,39 @@ export default function IntentClarification({ onContinue }: IntentClarificationP
           </ul>
         </div>
         
-        <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg">
-          <h3 className="font-medium text-orange-900 mb-2">Clarifying Questions</h3>
-          <div className="space-y-3">
-            {clarification.questions.map((question: any, index: number) => (
-              <div key={question.id} className="flex items-start space-x-3">
-                <div className="w-6 h-6 bg-orange-100 rounded-full flex items-center justify-center text-orange-600 text-xs font-medium mt-0.5">
-                  {index + 1}
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm text-orange-800" data-testid={`question-${index}`}>{question.text}</p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {question.options.map((option: string) => (
-                      <button
-                        key={option}
-                        onClick={() => handleOptionSelect(question.id, option)}
-                        className={`px-3 py-1 text-xs rounded-full transition-colors ${
-                          (selectedAnswers[question.id] || []).includes(option)
-                            ? "bg-orange-200 text-orange-800"
-                            : "bg-orange-100 text-orange-700 hover:bg-orange-200"
-                        }`}
-                        data-testid={`option-${question.id}-${option.replace(/\s+/g, '-').toLowerCase()}`}
-                      >
-                        {option}
-                      </button>
-                    ))}
+        {clarification.questions && clarification.questions.length > 0 && (
+          <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg">
+            <h3 className="font-medium text-orange-900 mb-2">Clarifying Questions</h3>
+            <div className="space-y-3">
+              {clarification.questions.map((question: any, index: number) => (
+                <div key={question.id} className="flex items-start space-x-3">
+                  <div className="w-6 h-6 bg-orange-100 rounded-full flex items-center justify-center text-orange-600 text-xs font-medium mt-0.5">
+                    {index + 1}
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm text-orange-800" data-testid={`question-${index}`}>{question.text}</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {question.options.map((option: string) => (
+                        <button
+                          key={option}
+                          onClick={() => handleOptionSelect(question.id, option)}
+                          className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                            (selectedAnswers[question.id] || []).includes(option)
+                              ? "bg-orange-200 text-orange-800"
+                              : "bg-orange-100 text-orange-700 hover:bg-orange-200"
+                          }`}
+                          data-testid={`option-${question.id}-${option.replace(/\s+/g, '-').toLowerCase()}`}
+                        >
+                          {option}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="flex justify-end space-x-3">
           <Button

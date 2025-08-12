@@ -11,6 +11,7 @@ import DialogueInterface from "@/components/dialogue-interface";
 import SynthesisResults from "@/components/synthesis-results";
 import { SettingsDialog } from "@/components/ui/settings-dialog";
 import { EssayDialog } from "@/components/ui/essay-dialog";
+import { ModeSelector } from "@/components/mode-selector";
 
 export default function Quest() {
   const [currentStage, setCurrentStage] = useState<string>("intentClarification");
@@ -50,6 +51,11 @@ export default function Quest() {
       </header>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* Mode Selector */}
+        <div className="mb-6">
+          <ModeSelector />
+        </div>
+
         {/* Progress Stepper */}
         <div className="mb-8">
           <ProcessStepper 

@@ -7,6 +7,7 @@ import { FlashLLMService, ProLLMService } from "./services/llm";
 import { ChatGPTAgent, GeminiAgent } from "./services/agents";
 import { GoogleSearchService, ArxivSearchService, RedditSearchService, PerplexityService } from "./services/search";
 import { configService } from "./services/config";
+import { devWorkflowService } from "./services/dev-workflow";
 
 const flashLLM = new FlashLLMService();
 const proLLM = new ProLLMService();
@@ -74,7 +75,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/clarify-intent", async (req, res) => {
     try {
       const { query } = req.body;
-      const clarification = await flashLLM.clarifyIntent(query);
+      
+      let clarification;
+      if (configService.isRealMode()) {
+        clarification = await flashLLM.clarifyIntent(query);
+      } else {
+        clarification = await devWorkflowService.clarifyIntent(query);
+      }
+      
       res.json(clarification);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -86,57 +94,120 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { sessionId, clarifiedIntent } = req.body;
       
-      // Generate search terms
-      const searchPlan = await flashLLM.generateSearchTerms(clarifiedIntent);
-      
-      // Execute parallel searches
-      const [googleResults, arxivResults, redditResults] = await Promise.all([
-        googleSearch.search(searchPlan.surfaceTerms?.[0] || "LLM knowledge work impact", 5),
-        arxivSearch.search(searchPlan.surfaceTerms?.[0] || "large language models employment", 3),
-        redditSearch.search(searchPlan.socialTerms?.[0] || "AI job impact discussion", 3)
-      ]);
+      if (configService.isRealMode()) {
+        // Production mode - use real APIs
+        const searchPlan = await flashLLM.generateSearchTerms(clarifiedIntent);
+        
+        const [googleResults, arxivResults, redditResults] = await Promise.all([
+          googleSearch.search(searchPlan.surfaceTerms?.[0] || "LLM knowledge work impact", 5),
+          arxivSearch.search(searchPlan.surfaceTerms?.[0] || "large language models employment", 3),
+          redditSearch.search(searchPlan.socialTerms?.[0] || "AI job impact discussion", 3)
+        ]);
 
-      // Store research findings
-      const allResults = [
-        ...googleResults.map((r: any) => ({ ...r, sourceType: "surface" })),
-        ...arxivResults.map((r: any) => ({ ...r, sourceType: "surface" })),
-        ...redditResults.map((r: any) => ({ ...r, sourceType: "social" }))
-      ];
+        const allResults = [
+          ...googleResults.map((r: any) => ({ ...r, sourceType: "surface" })),
+          ...arxivResults.map((r: any) => ({ ...r, sourceType: "surface" })),
+          ...redditResults.map((r: any) => ({ ...r, sourceType: "social" }))
+        ];
 
-      const findings = [];
-      for (const result of allResults) {
-        const finding = await storage.createResearchFinding({
-          sessionId,
-          source: result.source,
-          sourceType: result.sourceType,
-          title: result.title,
-          url: result.url,
-          content: result.content,
-          snippet: result.snippet,
-          relevanceScore: Math.floor(Math.random() * 40) + 60, // Mock scoring
-          qualityScore: Math.floor(Math.random() * 30) + 70,
-          isContradictory: Math.random() < 0.1,
-          metadata: result.metadata
+        const findings = [];
+        for (const result of allResults) {
+          const finding = await storage.createResearchFinding({
+            sessionId,
+            source: result.source,
+            sourceType: result.sourceType,
+            title: result.title,
+            url: result.url,
+            content: result.content,
+            snippet: result.snippet,
+            relevanceScore: Math.floor(Math.random() * 40) + 60,
+            qualityScore: Math.floor(Math.random() * 30) + 70,
+            isContradictory: Math.random() < 0.1,
+            metadata: result.metadata
+          });
+          findings.push(finding);
+        }
+
+        const factExtraction = await flashLLM.extractFacts(allResults);
+        const analysis = await proLLM.analyzeResearchFindings(findings);
+        
+        res.json({
+          searchResults: {
+            google: { results: googleResults },
+            arxiv: { results: arxivResults },
+            reddit: { results: redditResults }
+          },
+          factExtraction,
+          analysis,
+          findings
         });
-        findings.push(finding);
-      }
+      } else {
+        // Development mode - use dev workflow
+        const searchPlan = await devWorkflowService.generateSearchTerms(clarifiedIntent);
+        
+        // Create mock search results
+        const mockResults = [
+          {
+            source: "google",
+            sourceType: "surface",
+            title: "MIT Study: ChatGPT Boosts Productivity by 14% for Knowledge Workers",
+            url: "https://www.example.com/mit-study",
+            content: "A comprehensive study by MIT researchers found that knowledge workers using ChatGPT showed significant productivity improvements...",
+            snippet: "MIT researchers found that knowledge workers using ChatGPT showed significant productivity improvements",
+            metadata: { publishDate: "2024-01", citations: 127 }
+          },
+          {
+            source: "arxiv",
+            sourceType: "surface", 
+            title: "Economic Impact of Large Language Models on Labor Markets",
+            url: "https://arxiv.org/abs/2024.001",
+            content: "This paper analyzes the potential economic disruption caused by large language model adoption across knowledge work sectors...",
+            snippet: "This paper analyzes the potential economic disruption caused by large language model adoption",
+            metadata: { authors: ["Smith, J.", "Johnson, M."], category: "economics" }
+          },
+          {
+            source: "reddit",
+            sourceType: "social",
+            title: "Real-world ChatGPT productivity experiences from r/MachineLearning",
+            url: "https://reddit.com/r/MachineLearning/discussions",
+            content: "Community discussion reveals mixed experiences with ChatGPT integration in workplace settings...",
+            snippet: "Community discussion reveals mixed experiences with ChatGPT integration in workplace settings",
+            metadata: { upvotes: 342, comments: 89 }
+          }
+        ];
 
-      // Extract facts
-      const factExtraction = await flashLLM.extractFacts(allResults);
-      
-      // Analyze findings
-      const analysis = await proLLM.analyzeResearchFindings(findings);
-      
-      res.json({
-        searchResults: {
-          google: { results: googleResults },
-          arxiv: { results: arxivResults },
-          reddit: { results: redditResults }
-        },
-        factExtraction,
-        analysis,
-        findings
-      });
+        const findings = [];
+        for (const result of mockResults) {
+          const finding = await storage.createResearchFinding({
+            sessionId,
+            source: result.source,
+            sourceType: result.sourceType,
+            title: result.title,
+            url: result.url,
+            content: result.content,
+            snippet: result.snippet,
+            relevanceScore: Math.floor(Math.random() * 40) + 60,
+            qualityScore: Math.floor(Math.random() * 30) + 70,
+            isContradictory: Math.random() < 0.1,
+            metadata: result.metadata
+          });
+          findings.push(finding);
+        }
+
+        const factExtraction = await devWorkflowService.extractFacts(mockResults);
+        const analysis = await devWorkflowService.analyzeResearchFindings(findings);
+        
+        res.json({
+          searchResults: {
+            google: { results: mockResults.filter(r => r.source === 'google') },
+            arxiv: { results: mockResults.filter(r => r.source === 'arxiv') },
+            reddit: { results: mockResults.filter(r => r.source === 'reddit') }
+          },
+          factExtraction,
+          analysis,
+          findings
+        });
+      }
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -147,27 +218,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { sessionId, analysis } = req.body;
       
-      const deepQuery = await flashLLM.generateDeepResearchQuery(analysis);
-      const deepResults = await perplexityService.deepSearch(deepQuery);
-      
-      // Store deep research findings
-      for (const source of deepResults.sources) {
-        await storage.createResearchFinding({
-          sessionId,
-          source: "deepSonar",
-          sourceType: "deep",
-          title: source.title,
-          url: source.url,
-          content: source.content,
-          snippet: source.content.substring(0, 200),
-          relevanceScore: 95,
-          qualityScore: 90,
-          isContradictory: false,
-          metadata: source.metadata
-        });
+      if (configService.isRealMode()) {
+        const deepQuery = await flashLLM.generateDeepResearchQuery(analysis);
+        const deepResults = await perplexityService.deepSearch(deepQuery);
+        
+        for (const source of deepResults.sources) {
+          await storage.createResearchFinding({
+            sessionId,
+            source: "deepSonar",
+            sourceType: "deep",
+            title: source.title,
+            url: source.url,
+            content: source.content,
+            snippet: source.content.substring(0, 200),
+            relevanceScore: 95,
+            qualityScore: 90,
+            isContradictory: false,
+            metadata: source.metadata
+          });
+        }
+        
+        res.json({ query: deepQuery, results: deepResults });
+      } else {
+        const deepQuery = await devWorkflowService.generateDeepResearchQuery(analysis);
+        
+        const mockDeepResults = {
+          sources: [
+            {
+              title: "Policy Implications of Large Language Model Adoption: A Strategic Analysis",
+              url: "https://example.com/policy-analysis",
+              content: "Comprehensive analysis of policy frameworks needed for managing LLM adoption in knowledge work sectors, including workforce transition strategies and regulatory considerations...",
+              metadata: { confidence: 0.94, type: "policy_research" }
+            }
+          ]
+        };
+
+        for (const source of mockDeepResults.sources) {
+          await storage.createResearchFinding({
+            sessionId,
+            source: "deepSonar",
+            sourceType: "deep",
+            title: source.title,
+            url: source.url,
+            content: source.content,
+            snippet: source.content.substring(0, 200),
+            relevanceScore: 95,
+            qualityScore: 90,
+            isContradictory: false,
+            metadata: source.metadata
+          });
+        }
+        
+        res.json({ query: deepQuery, results: mockDeepResults });
       }
-      
-      res.json({ query: deepQuery, results: deepResults });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -177,7 +280,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/select-agents", async (req, res) => {
     try {
       const { researchData, userContext } = req.body;
-      const agentConfig = await proLLM.selectAgents(researchData, userContext);
+      
+      let agentConfig;
+      if (configService.isRealMode()) {
+        agentConfig = await proLLM.selectAgents(researchData, userContext);
+      } else {
+        agentConfig = await devWorkflowService.selectAgents(researchData, userContext);
+      }
+      
       res.json(agentConfig);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -189,10 +299,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { sessionId, roundNumber, agentConfigs, context } = req.body;
       
-      const [chatgptResponse, geminiResponse] = await Promise.all([
-        chatgptAgent.generateResponse(context.researchData, agentConfigs.chatgpt, context.previousDialogue || [], "Analyze the research data and provide your perspective"),
-        geminiAgent.generateResponse(context.researchData, agentConfigs.gemini, context.previousDialogue || [], "Analyze the research data and provide your perspective")
-      ]);
+      let chatgptResponse, geminiResponse;
+      
+      if (configService.isRealMode()) {
+        [chatgptResponse, geminiResponse] = await Promise.all([
+          chatgptAgent.generateResponse(context.researchData, agentConfigs.chatgpt, context.previousDialogue || [], "Analyze the research data and provide your perspective"),
+          geminiAgent.generateResponse(context.researchData, agentConfigs.gemini, context.previousDialogue || [], "Analyze the research data and provide your perspective")
+        ]);
+      } else {
+        [chatgptResponse, geminiResponse] = await Promise.all([
+          devWorkflowService.generateAgentResponse("chatgpt", "Analyze the research data and provide your perspective", context, roundNumber),
+          devWorkflowService.generateAgentResponse("gemini", "Analyze the research data and provide your perspective", context, roundNumber)
+        ]);
+      }
 
       // Store dialogue responses
       const chatgptDialogue = await storage.createAgentDialogue({
@@ -230,7 +349,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/evaluate-dialogue", async (req, res) => {
     try {
       const { context } = req.body;
-      const evaluation = await proLLM.evaluateDialogueRound(context);
+      
+      let evaluation;
+      if (configService.isRealMode()) {
+        evaluation = await proLLM.evaluateDialogueRound(context);
+      } else {
+        evaluation = await devWorkflowService.evaluateDialogueRound(context);
+      }
+      
       res.json(evaluation);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -241,7 +367,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/synthesize", async (req, res) => {
     try {
       const { researchData, dialogueHistory } = req.body;
-      const synthesis = await proLLM.synthesizeResults(researchData, dialogueHistory);
+      
+      let synthesis;
+      if (configService.isRealMode()) {
+        synthesis = await proLLM.synthesizeResults(researchData, dialogueHistory);
+      } else {
+        synthesis = await devWorkflowService.synthesizeResults(researchData, dialogueHistory);
+      }
+      
       res.json(synthesis);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
