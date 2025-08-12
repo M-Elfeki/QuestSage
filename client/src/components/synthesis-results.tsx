@@ -13,7 +13,7 @@ export default function SynthesisResults({ sessionId }: SynthesisResultsProps) {
       apiRequest("POST", "/api/synthesize", data).then(res => res.json())
   });
 
-  const { data: synthesis, isLoading } = synthesizeMutation;
+  const { data: synthesis } = synthesizeMutation;
 
   useEffect(() => {
     if (sessionId && !synthesis) {
@@ -24,7 +24,7 @@ export default function SynthesisResults({ sessionId }: SynthesisResultsProps) {
     }
   }, [sessionId]);
 
-  if (isLoading || synthesizeMutation.isPending) {
+  if (synthesizeMutation.isPending) {
     return (
       <div className="bg-surface rounded-xl shadow-sm border border-gray-200 p-6">
         <div className="flex items-center justify-between mb-6">

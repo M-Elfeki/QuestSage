@@ -58,8 +58,16 @@ export class MemStorage implements IStorage {
     const id = randomUUID();
     const now = new Date();
     const session: ResearchSession = { 
-      ...insertSession, 
-      id, 
+      ...insertSession,
+      id,
+      status: insertSession.status || "active",
+      userId: insertSession.userId || null,
+      currentStage: insertSession.currentStage || "intentClarification",
+      clarifiedIntent: insertSession.clarifiedIntent || null,
+      researchData: insertSession.researchData || null,
+      agentConfig: insertSession.agentConfig || null,
+      dialogueHistory: insertSession.dialogueHistory || null,
+      synthesisResult: insertSession.synthesisResult || null,
       createdAt: now, 
       updatedAt: now 
     };
@@ -94,8 +102,16 @@ export class MemStorage implements IStorage {
   async createResearchFinding(insertFinding: InsertResearchFinding): Promise<ResearchFinding> {
     const id = randomUUID();
     const finding: ResearchFinding = { 
-      ...insertFinding, 
-      id, 
+      ...insertFinding,
+      id,
+      title: insertFinding.title || null,
+      content: insertFinding.content || null,
+      snippet: insertFinding.snippet || null,
+      url: insertFinding.url || null,
+      relevanceScore: insertFinding.relevanceScore || null,
+      qualityScore: insertFinding.qualityScore || null,
+      isContradictory: insertFinding.isContradictory || null,
+      metadata: insertFinding.metadata || null,
       createdAt: new Date() 
     };
     this.researchFindings.set(id, finding);
@@ -117,8 +133,12 @@ export class MemStorage implements IStorage {
   async createAgentDialogue(insertDialogue: InsertAgentDialogue): Promise<AgentDialogue> {
     const id = randomUUID();
     const dialogue: AgentDialogue = { 
-      ...insertDialogue, 
-      id, 
+      ...insertDialogue,
+      id,
+      agentConfig: insertDialogue.agentConfig || null,
+      reasoning: insertDialogue.reasoning || null,
+      confidenceScore: insertDialogue.confidenceScore || null,
+      sources: insertDialogue.sources || null,
       createdAt: new Date() 
     };
     this.agentDialogues.set(id, dialogue);
