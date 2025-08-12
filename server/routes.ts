@@ -176,23 +176,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         ];
 
-        const findings = [];
-        for (const result of mockResults) {
-          const finding = await storage.createResearchFinding({
-            sessionId,
-            source: result.source,
-            sourceType: result.sourceType,
-            title: result.title,
-            url: result.url,
-            content: result.content,
-            snippet: result.snippet,
-            relevanceScore: Math.floor(Math.random() * 40) + 60,
-            qualityScore: Math.floor(Math.random() * 30) + 70,
-            isContradictory: Math.random() < 0.1,
-            metadata: result.metadata
-          });
-          findings.push(finding);
-        }
+        // In dev mode, we'll return mock data without storing to database
+        const findings = mockResults.map((result, index) => ({
+          id: `mock-finding-${index}`,
+          sessionId,
+          source: result.source,
+          sourceType: result.sourceType,
+          title: result.title,
+          url: result.url,
+          content: result.content,
+          snippet: result.snippet,
+          relevanceScore: Math.floor(Math.random() * 40) + 60,
+          qualityScore: Math.floor(Math.random() * 30) + 70,
+          isContradictory: Math.random() < 0.1,
+          metadata: result.metadata,
+          createdAt: new Date().toISOString()
+        }));
 
         const factExtraction = await devWorkflowService.extractFacts(mockResults);
         const analysis = await devWorkflowService.analyzeResearchFindings(findings);
@@ -253,23 +252,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ]
         };
 
-        for (const source of mockDeepResults.sources) {
-          await storage.createResearchFinding({
-            sessionId,
-            source: "deepSonar",
-            sourceType: "deep",
-            title: source.title,
-            url: source.url,
-            content: source.content,
-            snippet: source.content.substring(0, 200),
-            relevanceScore: 95,
-            qualityScore: 90,
-            isContradictory: false,
-            metadata: source.metadata
-          });
-        }
+        // In dev mode, create mock findings without database storage  
+        const deepFindings = mockDeepResults.sources.map((source, index) => ({
+          id: `mock-deep-finding-${index}`,
+          sessionId,
+          source: "deepSonar",
+          sourceType: "deep",
+          title: source.title,
+          url: source.url,
+          content: source.content,
+          snippet: source.content.substring(0, 200),
+          relevanceScore: 95,
+          qualityScore: 90,
+          isContradictory: false,
+          metadata: source.metadata,
+          createdAt: new Date().toISOString()
+        }));
         
-        res.json({ query: deepQuery, results: mockDeepResults });
+        res.json({ 
+          query: deepQuery, 
+          results: { 
+            ...mockDeepResults, 
+            mockFindings: deepFindings 
+          }
+        });
       }
     } catch (error: any) {
       res.status(500).json({ message: error.message });

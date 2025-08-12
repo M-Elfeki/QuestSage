@@ -42,8 +42,11 @@ export default function ResearchPipeline({ sessionId, onComplete, onProgress }: 
   useEffect(() => {
     if (sessionId && currentPhase === "surface") {
       startResearchMutation.mutate({
-        sessionId,
-        clarifiedIntent: { /* mock clarified intent */ }
+        sessionId: sessionId || "demo-session",
+        clarifiedIntent: { 
+          scope: "LLM impact analysis",
+          requirements: ["productivity analysis", "timeline predictions"]
+        }
       });
     }
   }, [sessionId, currentPhase]);
@@ -51,7 +54,7 @@ export default function ResearchPipeline({ sessionId, onComplete, onProgress }: 
   useEffect(() => {
     if (currentPhase === "deep" && researchData) {
       deepResearchMutation.mutate({
-        sessionId,
+        sessionId: sessionId || "demo-session",
         analysis: researchData.analysis
       });
     }
@@ -92,13 +95,13 @@ export default function ResearchPipeline({ sessionId, onComplete, onProgress }: 
                 <div className="flex justify-between text-gray-600">
                   <span>Google Search:</span>
                   <span className="font-medium text-green-600" data-testid="count-google-articles">
-                    {researchData.searchResults.google?.count || 0} articles
+                    {researchData.searchResults.google?.results?.length || 0} articles
                   </span>
                 </div>
                 <div className="flex justify-between text-gray-600">
                   <span>arXiv Papers:</span>
                   <span className="font-medium text-green-600" data-testid="count-arxiv-papers">
-                    {researchData.searchResults.arxiv?.count || 0} papers
+                    {researchData.searchResults.arxiv?.results?.length || 0} papers
                   </span>
                 </div>
               </div>
@@ -106,13 +109,13 @@ export default function ResearchPipeline({ sessionId, onComplete, onProgress }: 
                 <div className="flex justify-between text-gray-600">
                   <span>Reddit Discussions:</span>
                   <span className="font-medium text-green-600" data-testid="count-reddit-posts">
-                    {researchData.searchResults.reddit?.count || 0} posts
+                    {researchData.searchResults.reddit?.results?.length || 0} posts
                   </span>
                 </div>
                 <div className="flex justify-between text-gray-600">
-                  <span>Twitter Insights:</span>
-                  <span className="font-medium text-green-600" data-testid="count-twitter-threads">
-                    {researchData.searchResults.twitter?.count || 0} threads
+                  <span>Social Insights:</span>
+                  <span className="font-medium text-green-600" data-testid="count-social-insights">
+                    {(researchData.searchResults.reddit?.results?.length || 0)} insights
                   </span>
                 </div>
               </div>
@@ -144,31 +147,31 @@ export default function ResearchPipeline({ sessionId, onComplete, onProgress }: 
           {researchData?.factExtraction && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">Claims Extracted:</span>
+                <span className="text-sm text-gray-600">Key Facts Extracted:</span>
                 <span className="text-sm font-medium" data-testid="count-extracted-claims">
-                  {researchData.factExtraction.totalClaims}/{researchData.factExtraction.totalClaims}
+                  {researchData.factExtraction.keyFacts?.length || 0} facts
                 </span>
               </div>
               <div className="w-full bg-gray-200 rounded-full h-2">
                 <div className="bg-blue-500 h-2 rounded-full transition-all duration-300" style={{width: "100%"}}></div>
               </div>
-              {researchData.analysis && (
+              {researchData.factExtraction && (
                 <div className="grid grid-cols-3 gap-4 text-xs">
                   <div className="text-center">
-                    <div className="text-lg font-semibold text-green-600" data-testid="count-high-relevance">
-                      {researchData.analysis.highImpactClaims?.length || 0}
+                    <div className="text-lg font-semibold text-green-600" data-testid="count-high-confidence">
+                      {researchData.factExtraction.keyFacts?.filter((f: any) => f.confidence > 0.8).length || 0}
                     </div>
-                    <div className="text-gray-500">High Relevance</div>
+                    <div className="text-gray-500">High Confidence</div>
                   </div>
                   <div className="text-center">
-                    <div className="text-lg font-semibold text-yellow-600" data-testid="count-medium-relevance">
-                      {researchData.analysis.deduplicated?.length - researchData.analysis.highImpactClaims?.length || 0}
+                    <div className="text-lg font-semibold text-yellow-600" data-testid="count-medium-confidence">
+                      {researchData.factExtraction.keyFacts?.filter((f: any) => f.confidence > 0.6 && f.confidence <= 0.8).length || 0}
                     </div>
-                    <div className="text-gray-500">Medium Relevance</div>
+                    <div className="text-gray-500">Medium Confidence</div>
                   </div>
                   <div className="text-center">
                     <div className="text-lg font-semibold text-red-500" data-testid="count-contradictions">
-                      {researchData.analysis.contradictions?.length || 0}
+                      {researchData.factExtraction.contradictions?.length || 0}
                     </div>
                     <div className="text-gray-500">Contradictions</div>
                   </div>
