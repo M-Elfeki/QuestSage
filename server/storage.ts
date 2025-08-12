@@ -1,5 +1,7 @@
-import { type User, type InsertUser, type ResearchSession, type InsertResearchSession, type ResearchFinding, type InsertResearchFinding, type AgentDialogue, type InsertAgentDialogue } from "@shared/schema";
+import { type User, type InsertUser, type ResearchSession, type InsertResearchSession, type ResearchFinding, type InsertResearchFinding, type AgentDialogue, type InsertAgentDialogue, users, researchSessions, researchFindings, agentDialogues } from "@shared/schema";
 import { randomUUID } from "crypto";
+import { db } from "./db";
+import { eq, and, asc } from "drizzle-orm";
 
 export interface IStorage {
   // User methods
@@ -158,4 +160,92 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+// Database Storage Implementation
+export class DatabaseStorage implements IStorage {
+  async getUser(id: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user || undefined;
+  }
+
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.username, username));
+    return user || undefined;
+  }
+
+  async createUser(insertUser: InsertUser): Promise<User> {
+    const [user] = await db
+      .insert(users)
+      .values(insertUser)
+      .returning();
+    return user;
+  }
+
+  async createResearchSession(insertSession: InsertResearchSession): Promise<ResearchSession> {
+    const [session] = await db
+      .insert(researchSessions)
+      .values(insertSession)
+      .returning();
+    return session;
+  }
+
+  async getResearchSession(id: string): Promise<ResearchSession | undefined> {
+    const [session] = await db.select().from(researchSessions).where(eq(researchSessions.id, id));
+    return session || undefined;
+  }
+
+  async updateResearchSession(id: string, updates: Partial<ResearchSession>): Promise<ResearchSession> {
+    const [session] = await db
+      .update(researchSessions)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(researchSessions.id, id))
+      .returning();
+    
+    if (!session) {
+      throw new Error(`Research session ${id} not found`);
+    }
+    return session;
+  }
+
+  async getUserResearchSessions(userId: string): Promise<ResearchSession[]> {
+    return await db.select().from(researchSessions).where(eq(researchSessions.userId, userId));
+  }
+
+  async createResearchFinding(insertFinding: InsertResearchFinding): Promise<ResearchFinding> {
+    const [finding] = await db
+      .insert(researchFindings)
+      .values(insertFinding)
+      .returning();
+    return finding;
+  }
+
+  async getResearchFindings(sessionId: string): Promise<ResearchFinding[]> {
+    return await db.select().from(researchFindings).where(eq(researchFindings.sessionId, sessionId));
+  }
+
+  async getResearchFindingsBySource(sessionId: string, source: string): Promise<ResearchFinding[]> {
+    return await db.select().from(researchFindings)
+      .where(and(eq(researchFindings.sessionId, sessionId), eq(researchFindings.source, source)));
+  }
+
+  async createAgentDialogue(insertDialogue: InsertAgentDialogue): Promise<AgentDialogue> {
+    const [dialogue] = await db
+      .insert(agentDialogues)
+      .values(insertDialogue)
+      .returning();
+    return dialogue;
+  }
+
+  async getAgentDialogues(sessionId: string): Promise<AgentDialogue[]> {
+    return await db.select().from(agentDialogues)
+      .where(eq(agentDialogues.sessionId, sessionId))
+      .orderBy(asc(agentDialogues.roundNumber), asc(agentDialogues.createdAt));
+  }
+
+  async getAgentDialoguesByRound(sessionId: string, roundNumber: number): Promise<AgentDialogue[]> {
+    return await db.select().from(agentDialogues)
+      .where(and(eq(agentDialogues.sessionId, sessionId), eq(agentDialogues.roundNumber, roundNumber)));
+  }
+}
+
+// Use database storage if DATABASE_URL is available, otherwise use memory storage
+export const storage = process.env.DATABASE_URL ? new DatabaseStorage() : new MemStorage();

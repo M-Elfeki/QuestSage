@@ -3,13 +3,19 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertResearchSessionSchema, insertResearchFindingSchema, insertAgentDialogueSchema } from "@shared/schema";
 import { FlashLLMService, ProLLMService } from "./services/llm";
-import { SearchService } from "./services/search";
-import { AgentService } from "./services/agents";
+
+import { ChatGPTAgent, GeminiAgent } from "./services/agents";
+import { GoogleSearchService, ArxivSearchService, RedditSearchService, PerplexityService } from "./services/search";
+import { configService } from "./services/config";
 
 const flashLLM = new FlashLLMService();
 const proLLM = new ProLLMService();
-const searchService = new SearchService();
-const agentService = new AgentService();
+const googleSearch = new GoogleSearchService();
+const arxivSearch = new ArxivSearchService();
+const redditSearch = new RedditSearchService();
+const perplexityService = new PerplexityService();
+const chatgptAgent = new ChatGPTAgent();
+const geminiAgent = new GeminiAgent();
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Research Session routes
@@ -44,6 +50,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // System configuration
+  app.get("/api/config", async (req, res) => {
+    try {
+      const config = configService.getConfig();
+      res.json(config);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.put("/api/config", async (req, res) => {
+    try {
+      configService.updateConfig(req.body);
+      const config = configService.getConfig();
+      res.json(config);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
   // Intent clarification
   app.post("/api/clarify-intent", async (req, res) => {
     try {
@@ -64,19 +90,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const searchPlan = await flashLLM.generateSearchTerms(clarifiedIntent);
       
       // Execute parallel searches
-      const [googleResults, arxivResults, redditResults, twitterResults] = await Promise.all([
-        searchService.searchGoogle(searchPlan.surfaceTerms),
-        searchService.searchArxiv(searchPlan.surfaceTerms),
-        searchService.searchReddit(["MachineLearning", "artificial", "jobs"], searchPlan.socialTerms),
-        searchService.searchTwitter(["@researcher123", "@ai_expert"], searchPlan.socialTerms)
+      const [googleResults, arxivResults, redditResults] = await Promise.all([
+        googleSearch.search(searchPlan.surfaceTerms?.[0] || "LLM knowledge work impact", 5),
+        arxivSearch.search(searchPlan.surfaceTerms?.[0] || "large language models employment", 3),
+        redditSearch.search(searchPlan.socialTerms?.[0] || "AI job impact discussion", 3)
       ]);
 
       // Store research findings
       const allResults = [
-        ...googleResults.results.map(r => ({ ...r, source: "google", sourceType: "surface" })),
-        ...arxivResults.results.map(r => ({ ...r, source: "arxiv", sourceType: "surface" })),
-        ...redditResults.results.map(r => ({ ...r, source: "reddit", sourceType: "social" })),
-        ...twitterResults.results.map(r => ({ ...r, source: "twitter", sourceType: "social" }))
+        ...googleResults.map((r: any) => ({ ...r, sourceType: "surface" })),
+        ...arxivResults.map((r: any) => ({ ...r, sourceType: "surface" })),
+        ...redditResults.map((r: any) => ({ ...r, sourceType: "social" }))
       ];
 
       const findings = [];
@@ -105,10 +129,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       res.json({
         searchResults: {
-          google: googleResults,
-          arxiv: arxivResults,
-          reddit: redditResults,
-          twitter: twitterResults
+          google: { results: googleResults },
+          arxiv: { results: arxivResults },
+          reddit: { results: redditResults }
         },
         factExtraction,
         analysis,
@@ -125,7 +148,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { sessionId, analysis } = req.body;
       
       const deepQuery = await flashLLM.generateDeepResearchQuery(analysis);
-      const deepResults = await searchService.callDeepSonar(deepQuery);
+      const deepResults = await perplexityService.deepSearch(deepQuery);
       
       // Store deep research findings
       for (const source of deepResults.sources) {
@@ -136,7 +159,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           title: source.title,
           url: source.url,
           content: source.content,
-          snippet: source.snippet,
+          snippet: source.content.substring(0, 200),
           relevanceScore: 95,
           qualityScore: 90,
           isContradictory: false,
@@ -167,8 +190,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { sessionId, roundNumber, agentConfigs, context } = req.body;
       
       const [chatgptResponse, geminiResponse] = await Promise.all([
-        agentService.callChatGPT("Analyze the research data", context, agentConfigs.chatgpt),
-        agentService.callGemini("Analyze the research data", context, agentConfigs.gemini)
+        chatgptAgent.generateResponse(context.researchData, agentConfigs.chatgpt, context.previousDialogue || [], "Analyze the research data and provide your perspective"),
+        geminiAgent.generateResponse(context.researchData, agentConfigs.gemini, context.previousDialogue || [], "Analyze the research data and provide your perspective")
       ]);
 
       // Store dialogue responses
@@ -177,7 +200,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         roundNumber,
         agentType: "chatgpt",
         agentConfig: agentConfigs.chatgpt,
-        message: chatgptResponse.response,
+        message: chatgptResponse.content,
         reasoning: chatgptResponse.reasoning,
         confidenceScore: chatgptResponse.confidence,
         sources: chatgptResponse.sources
@@ -188,7 +211,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         roundNumber,
         agentType: "gemini", 
         agentConfig: agentConfigs.gemini,
-        message: geminiResponse.response,
+        message: geminiResponse.content,
         reasoning: geminiResponse.reasoning,
         confidenceScore: geminiResponse.confidence,
         sources: geminiResponse.sources
@@ -240,6 +263,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const dialogues = await storage.getAgentDialogues(req.params.id);
       res.json(dialogues);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Essay generation for follow-up questions
+  app.post("/api/generate-essay", async (req, res) => {
+    try {
+      const { sessionId, question, researchData } = req.body;
+      
+      // Use Pro LLM for essay generation
+      const essayPrompt = `Based on the comprehensive research data provided, write a detailed essay answering this follow-up question: "${question}"
+
+Research Context: ${JSON.stringify(researchData)}
+
+Please provide:
+1. A clear thesis statement
+2. Structured arguments with evidence
+3. Consideration of counterarguments
+4. Well-supported conclusions
+5. Proper attribution to sources
+
+Write in an engaging, informative style suitable for an educated audience.`;
+
+      let essayContent;
+      if (configService.isRealMode() && (proLLM as any).anthropic) {
+        const response = await (proLLM as any).anthropic.messages.create({
+          model: "claude-sonnet-4-20250514",
+          messages: [{ role: "user", content: essayPrompt }],
+          max_tokens: 3000,
+        });
+        essayContent = response.content[0].text;
+      } else {
+        // Mock essay response
+        essayContent = `# Understanding the Timeline of LLM Impact on Knowledge Work
+
+## Introduction
+
+The question of when and how large language models will transform knowledge work sectors represents one of the most significant economic and social challenges of our time. Based on comprehensive research across academic studies, industry reports, and real-world implementation experiences, several key patterns emerge that help us understand both the opportunities and risks ahead.
+
+## The Evidence for Gradual Transformation
+
+Current empirical data strongly supports a model of gradual transformation rather than sudden displacement. Studies from MIT and Stanford consistently show 15-30% productivity gains in routine cognitive tasks like coding, writing, and data analysis. However, these gains appear most pronounced in tasks that complement rather than replace human judgment.
+
+The evidence suggests that organizations implementing LLM tools strategically - with proper training and integration - see sustainable productivity improvements without significant job losses. Early adopter companies report workforce augmentation patterns, where AI tools enhance human capabilities rather than substitute for them.
+
+## Structural Risks and Timeline Acceleration
+
+However, we must also consider the structural economic pressures that could accelerate adoption beyond comfortable adaptation timelines. As LLM capabilities improve and costs decrease, competitive pressures may force rapid implementation even in organizations unprepared for thoughtful integration.
+
+The concern isn't whether LLMs will transform knowledge work - the evidence clearly indicates they will. The question is whether the transformation will occur gradually enough to allow for reskilling, social adaptation, and policy responses.
+
+## Sector-Specific Variations
+
+Different knowledge work sectors face varying levels of transformation risk and timeline pressure. Legal research, content creation, and basic analysis may see faster adoption, while strategic decision-making, creative problem-solving, and interpersonal roles may maintain stronger human advantages.
+
+## Conclusion
+
+The research suggests we're in a critical transition period where proactive planning and policy development can significantly influence whether LLM integration becomes a positive economic transformation or a source of widespread disruption. The key is maintaining focus on human-AI collaboration models while preparing for potential acceleration in adoption timelines.`;
+      }
+
+      res.json({ essay: essayContent });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

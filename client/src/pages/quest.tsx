@@ -9,11 +9,15 @@ import SourceMetrics from "@/components/source-metrics";
 import AgentSelection from "@/components/agent-selection";
 import DialogueInterface from "@/components/dialogue-interface";
 import SynthesisResults from "@/components/synthesis-results";
+import { SettingsDialog } from "@/components/ui/settings-dialog";
+import { EssayDialog } from "@/components/ui/essay-dialog";
 
 export default function Quest() {
   const [currentStage, setCurrentStage] = useState<string>("intentClarification");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [researchProgress, setResearchProgress] = useState(0);
+  const [researchData, setResearchData] = useState<any>(null);
+  const [synthesisData, setSynthesisData] = useState<any>(null);
 
   return (
     <div className="font-inter bg-background min-h-screen">
@@ -33,9 +37,13 @@ export default function Quest() {
                 <div className="w-2 h-2 bg-success rounded-full"></div>
                 <span>System Ready</span>
               </div>
-              <button className="p-2 text-gray-400 hover:text-gray-600" data-testid="button-settings">
-                <i className="fas fa-cog"></i>
-              </button>
+              {synthesisData && (
+                <EssayDialog 
+                  sessionId={sessionId || ''}
+                  researchData={researchData}
+                />
+              )}
+              <SettingsDialog />
             </div>
           </div>
         </div>
@@ -69,7 +77,10 @@ export default function Quest() {
             {currentStage === "research" && (
               <ResearchPipeline 
                 sessionId={sessionId}
-                onComplete={() => setCurrentStage("agentSelection")}
+                onComplete={(data) => {
+                  setResearchData(data);
+                  setCurrentStage("agentSelection");
+                }}
                 onProgress={setResearchProgress}
               />
             )}
@@ -88,7 +99,12 @@ export default function Quest() {
             )}
 
             {currentStage === "synthesis" && (
-              <SynthesisResults sessionId={sessionId} />
+              <SynthesisResults 
+                sessionId={sessionId}
+                onComplete={(synthesis) => {
+                  setSynthesisData(synthesis);
+                }}
+              />
             )}
           </div>
 
