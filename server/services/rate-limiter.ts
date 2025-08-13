@@ -48,8 +48,8 @@ class RateLimiter {
     
     const executeOperation = async (): Promise<T> => {
       // Enhanced retry logic for Gemini quota exceeded errors (429)
-      // Will retry up to 5 times with 60-second waits between attempts
-      const maxRetries = 5;
+      // Will retry up to 10 times with 60-second waits between attempts
+      const maxRetries = 10;
       const retryDelayMs = 60000; // 60 seconds
       
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
