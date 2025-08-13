@@ -52,6 +52,13 @@ yarn-error.log*
 lerna-debug.log*
 .pnpm-debug.log*
 
+# temp files
+temp/
+*.temp.json
+surface-search.json
+.local/
+.local
+
 # Runtime Data
 pids/
 *.pid

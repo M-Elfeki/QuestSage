@@ -12,6 +12,9 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:search": "vitest run tests/arxiv.test.ts tests/reddit.test.ts tests/web-scraping.test.ts",
+    "test:search:real": "vitest run tests/search-real-data.test.ts",
+    "test:search:validation": "vitest run tests/search-validation.test.ts",
+    "validate:search": "tsx tests/run-search-validation.ts",
     "test:llm": "vitest run tests/llm-integration.test.ts tests/model-specific.test.ts tests/workflow-integration.test.ts",
     "test:llm:watch": "vitest tests/llm-integration.test.ts tests/model-specific.test.ts tests/workflow-integration.test.ts",
     "test:integration": "vitest run tests/integration.test.ts tests/llm-integration.test.ts tests/workflow-integration.test.ts"

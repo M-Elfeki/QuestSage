@@ -94,7 +94,8 @@ export class FlashLLMService {
   async clarifyIntent(query: string): Promise<ClarificationResponse> {
     const startTime = Date.now();
 
-    if (configService.isRealMode() && this.anthropic) {
+    // Use real mode if we have any LLM configured
+    if (configService.isRealMode() && (this.anthropic || this.gemini || this.openai)) {
       return await this.realClarifyIntent(query);
     } else {
       return await this.devClarifyIntent(query);
@@ -102,6 +103,119 @@ export class FlashLLMService {
   }
 
   private async realClarifyIntent(query: string): Promise<ClarificationResponse> {
+    // Try to use available LLM providers in order of preference
+    if (this.anthropic) {
+      return await this.realClarifyIntentWithAnthropic(query);
+    } else if (this.gemini) {
+      return await this.realClarifyIntentWithGemini(query);
+    } else if (this.openai) {
+      return await this.realClarifyIntentWithOpenAI(query);
+    } else {
+      throw new Error("No LLM provider configured");
+    }
+  }
+  
+  private async realClarifyIntentWithGemini(query: string): Promise<ClarificationResponse> {
+    const prompt = `You are an expert research analyst specializing in generating precise clarifying questions. Your primary goal is to identify ambiguities in user queries and generate high-quality clarifying questions.
+
+Raw User Question: "${query}"
+
+PROCESS:
+1. Extract explicit requirements and constraints from the query
+2. Identify answer format needed (affects subsequent research resource allocation)  
+3. **FOCUS: Generate clarifying questions for ambiguities** - This is the most critical part
+4. Assess problem complexity level
+
+CLARIFYING QUESTIONS GENERATION (PRIMARY FOCUS):
+- Identify each ambiguous aspect in the user's query
+- Generate specific, actionable clarifying questions
+- For each question, provide:
+  * Multiple choice options when appropriate (3-5 well-thought options)
+  * Allow open text when the question requires nuanced input
+- Focus on ambiguities that would significantly impact research direction
+- Prioritize questions that clarify scope, timeframe, methodology preferences, and success criteria
+
+IMPORTANT FORMATTING RULES:
+- Each clarifying question MUST have either "options" (array) or "open_text": true
+- DO NOT use both in the same question - choose the most appropriate format
+- For options, provide exactly 3-5 clear, distinct choices
+
+Respond with a JSON object with this exact structure:
+{
+  "query": "original query",
+  "clarifiedIntent": "refined research question",
+  "answerFormat": "one of: comprehensive_report, comparison_analysis, fact_check, recommendation_list, trend_analysis, specific_answer",
+  "clarifyingQuestions": [
+    {
+      "question": "specific question text",
+      "context": "why this matters for research",
+      "options": ["option1", "option2", "option3"] OR "open_text": true
+    }
+  ],
+  "complexityLevel": "one of: simple, moderate, complex"
+}`;
+
+    const response = await this.callGeminiFlash(prompt);
+    
+    // Gemini returns parsed JSON already from callGeminiFlash
+    return response;
+  }
+  
+  private async realClarifyIntentWithOpenAI(query: string): Promise<ClarificationResponse> {
+    if (!this.openai) throw new Error("OpenAI not configured");
+    
+    const prompt = `You are an expert research analyst specializing in generating precise clarifying questions. Your primary goal is to identify ambiguities in user queries and generate high-quality clarifying questions.
+
+Raw User Question: "${query}"
+
+PROCESS:
+1. Extract explicit requirements and constraints from the query
+2. Identify answer format needed (affects subsequent research resource allocation)  
+3. **FOCUS: Generate clarifying questions for ambiguities** - This is the most critical part
+4. Assess problem complexity level
+
+CLARIFYING QUESTIONS GENERATION (PRIMARY FOCUS):
+- Identify each ambiguous aspect in the user's query
+- Generate specific, actionable clarifying questions
+- For each question, provide:
+  * Multiple choice options when appropriate (3-5 well-thought options)
+  * Allow open text when the question requires nuanced input
+- Focus on ambiguities that would significantly impact research direction
+- Prioritize questions that clarify scope, timeframe, methodology preferences, and success criteria
+
+IMPORTANT FORMATTING RULES:
+- Each clarifying question MUST have either "options" (array) or "open_text": true
+- DO NOT use both in the same question - choose the most appropriate format
+- For options, provide exactly 3-5 clear, distinct choices
+
+Respond with a JSON object with this exact structure:
+{
+  "query": "original query",
+  "clarifiedIntent": "refined research question",
+  "answerFormat": "one of: comprehensive_report, comparison_analysis, fact_check, recommendation_list, trend_analysis, specific_answer",
+  "clarifyingQuestions": [
+    {
+      "question": "specific question text",
+      "context": "why this matters for research",
+      "options": ["option1", "option2", "option3"] OR "open_text": true
+    }
+  ],
+  "complexityLevel": "one of: simple, moderate, complex"
+}`;
+
+    const response = await this.openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" }
+    });
+    
+    const content = response.choices[0].message.content;
+    if (!content) throw new Error("No response from OpenAI");
+    
+    return JSON.parse(content);
+  }
+
+  private async realClarifyIntentWithAnthropic(query: string): Promise<ClarificationResponse> {
     if (!this.anthropic) throw new Error("Anthropic not configured");
 
     const prompt = `You are an expert research analyst specializing in generating precise clarifying questions. Your primary goal is to identify ambiguities in user queries and generate high-quality clarifying questions.
@@ -1075,6 +1189,15 @@ DRIFT RISK FACTORS:
 - Discussion becoming too abstract without practical relevance
 - Focus shifting away from user's specified requirements
 
+WHEN CREATING A CHECKPOINT QUESTION:
+- Include the FULL original research question for context
+- Summarize the key findings/insights discovered so far
+- Clearly explain what aspects are being debated or explored
+- List specific topics that have emerged from the discussion
+- Make the question completely self-sufficient - the user should understand everything from the question alone
+- Provide concrete options or directions the user can choose from
+- Explain the impact of their choice on the remaining dialogue rounds
+
 Respond in JSON format:
 {
   "isAligned": true/false,
@@ -1150,6 +1273,11 @@ Respond in JSON format:
       const originalQuery = userIntent?.query || 'your research question';
       const clarifiedIntent = userIntent?.clarifiedIntent || userIntent?.query || originalQuery;
       
+      // Extract key insights from conversation so far
+      const keyInsights = this.extractKeyInsights(conversationHistory);
+      const emergentTopics = this.extractRecentTopics(conversationHistory.slice(-4));
+      const debatedAspects = this.extractDebatedAspects(conversationHistory);
+      
       return {
         isAligned: false,
         riskLevel: 'high',
@@ -1158,21 +1286,41 @@ Respond in JSON format:
           "Agents focusing on methodology rather than addressing the core question"
         ],
         checkpointQuestion: `
-🔄 **Alignment Check Required**
+🔄 **Research Alignment Check Required**
 
-**Original Question:** "${originalQuery}"
+**Your Original Research Question:**
+"${originalQuery}"
 
-**Current Situation:** After ${currentRound} rounds of dialogue, the agents have drifted into abstract theoretical discussions and methodological debates rather than addressing your core research question.
+**Research Context & Progress:**
+You initiated this research to explore: ${clarifiedIntent}
 
-**Decision Needed:** How would you like to redirect the conversation for the remaining ${7 - currentRound} rounds?
+**Key Insights Discovered So Far (${currentRound} of 7 rounds completed):**
+${keyInsights.length > 0 ? keyInsights.map((insight, i) => `${i + 1}. ${insight}`).join('\n') : '• The agents have been exploring various perspectives but haven\'t yet converged on concrete insights.'}
 
-**Options to Consider:**
-• Refocus on practical, real-world applications and examples
-• Dive deeper into specific aspects of your original question
-• Explore a particular angle that emerged but wasn't fully developed
-• Request concrete evidence and case studies
+**Current Debate Focus:**
+The agents are currently debating:
+${debatedAspects.map(aspect => `• ${aspect}`).join('\n')}
 
-**Please provide guidance:** What specific aspect or direction should the agents prioritize?`.trim(),
+**Emerging Topics:**
+${emergentTopics.map(topic => `• ${topic}`).join('\n')}
+
+**⚠️ Observation:** The discussion has shifted toward abstract theoretical frameworks and methodological debates rather than directly addressing your research question about practical applications and real-world implications.
+
+**Your Decision Needed:**
+With ${7 - currentRound} rounds remaining, how would you like to redirect the agents' focus?
+
+**Specific Options:**
+1. **Return to Core Question**: Have agents provide concrete examples and evidence directly related to "${truncateLog(originalQuery, 100)}"
+
+2. **Deep Dive on Insights**: Choose one of the discovered insights above to explore in depth with supporting evidence
+
+3. **Focus on Practical Applications**: Request real-world case studies, implementation examples, and actionable recommendations
+
+4. **Explore Emerging Theme**: Pick one of the emerging topics to investigate thoroughly
+
+5. **Custom Direction**: Provide your own specific guidance for what aspects matter most to you
+
+**Please provide your direction:** Be as specific as possible about what you want the agents to focus on. Your response will directly shape the remaining dialogue.`.trim(),
         recommendAction: 'clarify'
       };
     }
@@ -1181,26 +1329,65 @@ Respond in JSON format:
       const originalQuery = userIntent?.query || 'your research question';
       const recentTopics = this.extractRecentTopics(conversationHistory.slice(-4));
       
+      // Get comprehensive context
+      const keyInsights = this.extractKeyInsights(conversationHistory);
+      const initialFindings = this.extractInitialFindings(conversationHistory);
+      const debatePositions = this.extractAgentPositions(conversationHistory);
+      
       return {
         isAligned: false,
         riskLevel: 'medium',
         driftAreas: ["Some tangential exploration detected"],
         checkpointQuestion: `
-🎯 **Course Correction Opportunity**
+🎯 **Research Direction Check**
 
-**Your Research Question:** "${originalQuery}"
+**Your Original Research Question:**
+"${originalQuery}"
 
-**Progress So Far:** Round ${currentRound} of 7
+**Why You Started This Research:**
+${userIntent?.clarifiedIntent || userIntent?.query || 'To gain comprehensive insights on this topic'}
 
-**Observation:** The agents have begun exploring some tangential topics:
+**Progress Update (Round ${currentRound} of 7):**
+
+**Initial Findings:**
+${initialFindings.map((finding, i) => `${i + 1}. ${finding}`).join('\n')}
+
+**Current Agent Perspectives:**
+${debatePositions.map(pos => `• ${pos}`).join('\n')}
+
+**Emerging Themes Being Explored:**
 ${recentTopics.map(t => `• ${t}`).join('\n')}
 
-**Your Input Needed:** Would you like to:
-1. Continue exploring these emerging themes
-2. Return focus to your original question
-3. Narrow down to a specific subtopic
+**📊 Assessment:** The agents have started exploring some tangential but potentially valuable topics that weren't part of your original question. These explorations might yield unexpected insights, but they're also using up dialogue rounds.
 
-**Please specify:** Which direction best serves your research goals?`.trim(),
+**Your Strategic Choice:**
+
+**Option 1 - Stay the Course:** Continue with current exploration
+- Pros: May discover unexpected connections and insights
+- Cons: Less time for your core question
+- Best if: You're interested in these emerging themes
+
+**Option 2 - Refocus on Original:** Return to "${truncateLog(originalQuery, 80)}"
+- Pros: Ensures your main question gets fully addressed
+- Cons: May miss interesting tangential insights
+- Best if: You need specific answers to your original question
+
+**Option 3 - Hybrid Approach:** Quickly wrap current themes, then return to core
+- Pros: Balance of exploration and focus
+- Cons: May feel rushed
+- Best if: Both aspects seem valuable
+
+**Option 4 - Narrow Focus:** Pick ONE specific aspect to dive deep
+- Pros: Thorough exploration of most important element
+- Cons: Other aspects won't be covered
+- Best if: One topic stands out as most critical
+
+**Your Direction:** Please describe specifically what you'd like the agents to prioritize. Examples:
+- "Focus on [specific aspect] with real-world examples"
+- "Compare perspectives on [specific theme]"
+- "Provide evidence for [specific claim]"
+
+Your guidance will immediately redirect the conversation.`.trim(),
         recommendAction: 'clarify'
       };
     }
@@ -1252,6 +1439,149 @@ ${recentTopics.map(t => `• ${t}`).join('\n')}
     }
     
     return topics.slice(0, 3); // Return top 3 topics
+  }
+
+  private extractKeyInsights(conversationHistory: any[]): string[] {
+    const insights: string[] = [];
+    
+    conversationHistory.forEach(msg => {
+      const content = msg.message || '';
+      
+      // Look for insight patterns
+      const insightPatterns = [
+        /studies show that\s+([^.]+)/i,
+        /research indicates\s+([^.]+)/i,
+        /evidence suggests\s+([^.]+)/i,
+        /we can conclude that\s+([^.]+)/i,
+        /the data reveals\s+([^.]+)/i,
+        /key finding[s]?:\s*([^.]+)/i,
+        /importantly,\s+([^.]+)/i,
+        /significantly,\s+([^.]+)/i
+      ];
+      
+      insightPatterns.forEach(pattern => {
+        const matches = content.matchAll(new RegExp(pattern, 'gi'));
+        for (const match of matches) {
+          if (match[1]) {
+            const insight = match[1].trim().replace(/\s+/g, ' ');
+            if (insight.length > 20 && insight.length < 200 && !insights.some(i => i.includes(insight))) {
+              insights.push(insight);
+            }
+          }
+        }
+      });
+    });
+    
+    return insights.slice(0, 5); // Return top 5 insights
+  }
+
+  private extractInitialFindings(conversationHistory: any[]): string[] {
+    const findings: string[] = [];
+    
+    // Focus on first few rounds for initial findings
+    const earlyMessages = conversationHistory.slice(0, Math.min(6, conversationHistory.length));
+    
+    earlyMessages.forEach(msg => {
+      const content = msg.message || '';
+      
+      // Look for finding patterns
+      const findingPatterns = [
+        /initial (?:findings?|observations?|analysis) (?:show|indicate|suggest)\s+([^.]+)/i,
+        /first,?\s+([^.]+\.)/i,
+        /to begin with,?\s+([^.]+)/i,
+        /preliminary (?:data|evidence|research)\s+([^.]+)/i,
+        /starting point[s]?:\s*([^.]+)/i
+      ];
+      
+      findingPatterns.forEach(pattern => {
+        const match = content.match(pattern);
+        if (match && match[1]) {
+          const finding = match[1].trim();
+          if (finding.length > 20 && finding.length < 150 && !findings.includes(finding)) {
+            findings.push(finding);
+          }
+        }
+      });
+    });
+    
+    // If no specific findings, extract key statements from early rounds
+    if (findings.length === 0 && earlyMessages.length > 0) {
+      earlyMessages.slice(0, 3).forEach(msg => {
+        const content = msg.message || '';
+        const sentences = content.split(/[.!?]/).filter((s: string) => s.trim().length > 30);
+        if (sentences.length > 0) {
+          findings.push(sentences[0].trim());
+        }
+      });
+    }
+    
+    return findings.slice(0, 3);
+  }
+
+  private extractDebatedAspects(conversationHistory: any[]): string[] {
+    const debates: string[] = [];
+    
+    conversationHistory.forEach(msg => {
+      const content = msg.message || '';
+      
+      // Look for debate patterns
+      const debatePatterns = [
+        /however,?\s+([^.]+)/i,
+        /on the other hand,?\s+([^.]+)/i,
+        /alternatively,?\s+([^.]+)/i,
+        /counter[- ]?argument[s]?:\s*([^.]+)/i,
+        /disagree[s]? (?:with|that)\s+([^.]+)/i,
+        /the debate centers on\s+([^.]+)/i,
+        /contentious (?:issue|point|aspect)[s]?:\s*([^.]+)/i,
+        /different perspectives on\s+([^.]+)/i
+      ];
+      
+      debatePatterns.forEach(pattern => {
+        const match = content.match(pattern);
+        if (match && match[1]) {
+          const debate = match[1].trim();
+          if (debate.length > 15 && debate.length < 100 && !debates.includes(debate)) {
+            debates.push(debate);
+          }
+        }
+      });
+    });
+    
+    return debates.slice(0, 3);
+  }
+
+  private extractAgentPositions(conversationHistory: any[]): string[] {
+    const positions: string[] = [];
+    const agentMap = new Map<string, string>();
+    
+    // Get the most recent position from each agent
+    conversationHistory.slice(-6).forEach(msg => {
+      const agent = msg.agent || 'Unknown Agent';
+      const content = msg.message || '';
+      
+      // Look for position statements
+      const positionPatterns = [
+        /I (?:believe|think|argue|maintain) that\s+([^.]+)/i,
+        /my (?:position|view|perspective) is that\s+([^.]+)/i,
+        /from my analysis,?\s+([^.]+)/i,
+        /the evidence (?:points to|suggests|indicates)\s+([^.]+)/i
+      ];
+      
+      positionPatterns.forEach(pattern => {
+        const match = content.match(pattern);
+        if (match && match[1]) {
+          const position = match[1].trim();
+          if (position.length > 20 && position.length < 150) {
+            agentMap.set(agent, `${agent}: ${position}`);
+          }
+        }
+      });
+    });
+    
+    // Convert map to array
+    agentMap.forEach(position => positions.push(position));
+    
+    return positions.slice(0, 4);
   }
 
   private delay(ms: number): Promise<void> {
@@ -1326,7 +1656,7 @@ export class ProLLMService {
     evaluationCriteria: string;
     orchestrationPlan: any;
   }> {
-    if (configService.isRealMode() && this.anthropic) {
+    if (configService.isRealMode() && (this.anthropic || this.gemini || this.openai)) {
       return await this.realOrchestrateResearch(clarifiedIntent, searchTerms);
     } else {
       return await this.devOrchestrateResearch(clarifiedIntent, searchTerms);
@@ -1334,6 +1664,101 @@ export class ProLLMService {
   }
 
   private async realOrchestrateResearch(clarifiedIntent: any, searchTerms: any): Promise<{
+    priorities: string[];
+    expectedFindings: string[];
+    evaluationCriteria: string;
+    orchestrationPlan: any;
+  }> {
+    // Try to use available LLM providers in order of preference
+    if (this.anthropic) {
+      return await this.realOrchestrateResearchWithAnthropic(clarifiedIntent, searchTerms);
+    } else if (this.gemini) {
+      return await this.realOrchestrateResearchWithGemini(clarifiedIntent, searchTerms);
+    } else if (this.openai) {
+      return await this.realOrchestrateResearchWithOpenAI(clarifiedIntent, searchTerms);
+    } else {
+      throw new Error("No LLM provider configured");
+    }
+  }
+  
+  private async realOrchestrateResearchWithGemini(clarifiedIntent: any, searchTerms: any): Promise<{
+    priorities: string[];
+    expectedFindings: string[];
+    evaluationCriteria: string;
+    orchestrationPlan: any;
+  }> {
+    const prompt = `You are a research orchestration expert. Plan a comprehensive research strategy.
+
+Intent: ${JSON.stringify(clarifiedIntent)}
+Search Terms: ${JSON.stringify(searchTerms)}
+
+Create a detailed research plan that includes:
+1. Research priorities (ordered by importance)
+2. Expected findings categories
+3. Quality evaluation criteria
+4. Time allocation plan for each research phase
+
+Respond in JSON format:
+{
+  "priorities": ["priority1", "priority2", ...],
+  "expectedFindings": ["finding1", "finding2", ...],
+  "evaluationCriteria": "detailed criteria description",
+  "orchestrationPlan": {
+    "surfacePhase": "time estimate",
+    "socialPhase": "time estimate",
+    "deepPhase": "time estimate"
+  }
+}`;
+
+    const response = await this.callGeminiFlash(prompt);
+    // Gemini returns parsed JSON already from callGeminiFlash
+    return response;
+  }
+  
+  private async realOrchestrateResearchWithOpenAI(clarifiedIntent: any, searchTerms: any): Promise<{
+    priorities: string[];
+    expectedFindings: string[];
+    evaluationCriteria: string;
+    orchestrationPlan: any;
+  }> {
+    if (!this.openai) throw new Error("OpenAI not configured");
+    
+    const prompt = `You are a research orchestration expert. Plan a comprehensive research strategy.
+
+Intent: ${JSON.stringify(clarifiedIntent)}
+Search Terms: ${JSON.stringify(searchTerms)}
+
+Create a detailed research plan that includes:
+1. Research priorities (ordered by importance)
+2. Expected findings categories
+3. Quality evaluation criteria
+4. Time allocation plan for each research phase
+
+Respond in JSON format:
+{
+  "priorities": ["priority1", "priority2", ...],
+  "expectedFindings": ["finding1", "finding2", ...],
+  "evaluationCriteria": "detailed criteria description",
+  "orchestrationPlan": {
+    "surfacePhase": "time estimate",
+    "socialPhase": "time estimate",
+    "deepPhase": "time estimate"
+  }
+}`;
+
+    const response = await this.openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" }
+    });
+    
+    const content = response.choices[0].message.content;
+    if (!content) throw new Error("No response from OpenAI");
+    
+    return JSON.parse(content);
+  }
+
+  private async realOrchestrateResearchWithAnthropic(clarifiedIntent: any, searchTerms: any): Promise<{
     priorities: string[];
     expectedFindings: string[];
     evaluationCriteria: string;
@@ -1425,7 +1850,7 @@ Respond in JSON format:
     const filteredClaims = this.applyDeterministicFilter(findings, evidenceThresholds);
     
     // Step 2: Pro LLM analysis of filtered claims
-    if (configService.isRealMode() && this.anthropic) {
+    if (configService.isRealMode() && (this.anthropic || this.gemini || this.openai)) {
       return await this.realAnalyzeResearchFindings(filteredClaims, evidenceThresholds);
     } else {
       // For now, use the mock version until full implementation is complete
@@ -1577,7 +2002,7 @@ Respond in JSON format:
     orchestratorRationale: string;
     uncertaintyDimensions: string[];
   }> {
-    if (configService.isRealMode() && this.anthropic) {
+    if (configService.isRealMode() && (this.anthropic || this.gemini || this.openai)) {
       return await this.realSelectAgents(researchData, userContext);
     } else {
       return await this.devSelectAgents(researchData, userContext);
@@ -1818,7 +2243,7 @@ Respond in JSON format:
     insightStagnationDetected: boolean;
     successCriteriaCompletionPercentage?: number;
   }> {
-    if (configService.isRealMode() && this.anthropic) {
+    if (configService.isRealMode() && (this.anthropic || this.gemini || this.openai)) {
       return await this.realEvaluateDialogueRound(context);
     } else {
       return await this.mockEvaluateDialogueRound(context);
@@ -2114,7 +2539,7 @@ Respond in JSON format:
     confidenceInterval: [number, number];
     synthesis: string;
   }> {
-    if (configService.isRealMode() && this.anthropic) {
+    if (configService.isRealMode() && (this.anthropic || this.gemini || this.openai)) {
       return await this.realSynthesizeResults(surfaceResearchReport, deepResearchReport, dialogueHistory, userContext);
     } else {
       return await this.devSynthesizeResults(surfaceResearchReport, deepResearchReport, dialogueHistory, userContext);

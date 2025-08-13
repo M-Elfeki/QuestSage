@@ -54,7 +54,13 @@ export class ConfigService {
   }
 
   private determineMode(): 'dev' | 'prod' {
-    // Default to dev mode - user can switch to prod when ready
+    // Check environment variable - only use prod if explicitly set
+    const envMode = process.env.NODE_ENV || process.env.MODE;
+    if (envMode === 'production' || envMode === 'prod') {
+      return 'prod';
+    }
+    
+    // Default to dev mode unless explicitly set to prod
     return 'dev';
   }
 

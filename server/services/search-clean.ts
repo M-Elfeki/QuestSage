@@ -256,76 +256,21 @@ export class WebScrapingService {
 
   private async searchGoogle(query: string): Promise<Map<string, string>> {
     try {
-      // First try Google Search API if configured
-      if (process.env.GOOGLE_SEARCH_API_KEY && process.env.GOOGLE_SEARCH_ENGINE_ID) {
-        const apiKey = process.env.GOOGLE_SEARCH_API_KEY;
-        const engineId = process.env.GOOGLE_SEARCH_ENGINE_ID;
-        const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${engineId}&q=${encodeURIComponent(query)}&num=10`;
-        
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
-        
-        const response = await fetch(url, {
-          headers: {
-            'Accept': 'application/json'
-          },
-          signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
-
-        if (response.ok) {
-          const data = await response.json();
-          const results = new Map<string, string>();
-          
-          if (data.items && Array.isArray(data.items)) {
-            for (const item of data.items) {
-              const url = item.link;
-              const title = item.title || '';
-              const snippet = item.snippet || '';
-              
-              if (url && url.startsWith('http') && title) {
-                const content = `${title}\n\n${snippet}`.trim();
-                if (content.length > 30) {
-                  results.set(url, content.substring(0, 500));
-                }
-              }
-            }
-          }
-          
-          if (results.size > 0) {
-            return results;
-          }
-        }
+      // Check if Google Search API is configured
+      if (!process.env.GOOGLE_SEARCH_API_KEY || !process.env.GOOGLE_SEARCH_ENGINE_ID) {
+        return new Map();
       }
       
-      // Fallback to Google News scraping (no API required)
-      return await this.searchGoogleNews(query);
-    } catch (error) {
-      console.error("Google search failed:", error);
-      // Try Google News as fallback
-      return await this.searchGoogleNews(query);
-    }
-  }
-  
-  private async searchGoogleNews(query: string): Promise<Map<string, string>> {
-    try {
-      const url = 'https://news.google.com/search';
-      const params = new URLSearchParams({ 
-        q: query, 
-        hl: 'en', 
-        gl: 'US',
-        ceid: 'US:en'
-      });
+      const apiKey = process.env.GOOGLE_SEARCH_API_KEY;
+      const engineId = process.env.GOOGLE_SEARCH_ENGINE_ID;
+      const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${engineId}&q=${encodeURIComponent(query)}&num=10`;
       
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000);
       
-      const response = await fetch(`${url}?${params}`, {
+      const response = await fetch(url, {
         headers: {
-          'User-Agent': this.userAgent,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5'
+          'Accept': 'application/json'
         },
         signal: controller.signal
       });
@@ -333,55 +278,31 @@ export class WebScrapingService {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        throw new Error(`Google News returned ${response.status}`);
+        throw new Error(`Google Search API returned ${response.status}`);
       }
 
-      const html = await response.text();
-      const cheerio = await import('cheerio');
-      const $ = cheerio.load(html);
-      
+      const data = await response.json();
       const results = new Map<string, string>();
       
-      // Find news articles
-      $('article').each((_, element) => {
-        const $article = $(element);
-        const $link = $article.find('a');
-        const href = $link.attr('href');
-        
-        if (href && (href.startsWith('./articles/') || href.startsWith('./read/'))) {
-          // Extract the actual URL from Google News redirect
-          const actualUrl = this.extractGoogleNewsUrl(href);
-          if (actualUrl) {
-            const title = $article.find('h3, h4').first().text().trim();
-            const snippet = $article.find('time').parent().text().trim();
-            
-            if (title) {
-              const content = `${title}\n\n${snippet}`.trim();
-              if (content.length > 30) {
-                results.set(actualUrl, content.substring(0, 500));
-              }
+      if (data.items && Array.isArray(data.items)) {
+        for (const item of data.items) {
+          const url = item.link;
+          const title = item.title || '';
+          const snippet = item.snippet || '';
+          
+          if (url && url.startsWith('http') && title) {
+            const content = `${title}\n\n${snippet}`.trim();
+            if (content.length > 30) {
+              results.set(url, content.substring(0, 500));
             }
           }
         }
-      });
-
+      }
+      
       return results;
     } catch (error) {
-      console.error("Google News search failed:", error);
+      console.error("Google search failed:", error);
       return new Map();
-    }
-  }
-  
-  private extractGoogleNewsUrl(googleNewsPath: string): string | null {
-    try {
-      // Google News uses a redirect pattern
-      if (googleNewsPath.includes('./articles/')) {
-        // For now, return a placeholder - in production, you'd need to follow the redirect
-        return `https://news.google.com${googleNewsPath.substring(1)}`;
-      }
-      return null;
-    } catch (error) {
-      return null;
     }
   }
 
@@ -1123,9 +1044,9 @@ export class PerplexityService {
     if (this.apiKey) {
       return await this.realDeepSearch(query);
     } else {
-      // For dev mode, just return empty results for deep sonar
+      console.warn('Perplexity API key not configured - returning empty result');
       return {
-        answer: '',
+        answer: 'Perplexity API key not configured',
         sources: [],
         confidence: 0
       };

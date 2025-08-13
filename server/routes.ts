@@ -148,7 +148,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             (current, total, term) => updateProgress("arXiv Search", current, total, term)
           ),
           redditSearch.searchMultipleSubreddits(
-            searchTerms.domainSpecificSources?.relevantSubreddits?.slice(0, searchConfig.redditSubredditsLimit) || ["MachineLearning", "artificial", "ChatGPT", "OpenAI", "singularity", "cscareerquestions", "programming", "LegalAdvice", "consulting", "productivity"], 
+            searchTerms.domainSpecificSources?.relevantSubreddits?.map((s: string) => s.replace(/^r\//, '')).slice(0, searchConfig.redditSubredditsLimit) || ["MachineLearning", "artificial", "ChatGPT", "OpenAI", "singularity", "cscareerquestions", "programming", "LegalAdvice", "consulting", "productivity"], 
             searchConfig.redditPostsPerSubreddit,
             searchConfig.redditCommentsPerPost,
             (current, total, subreddit) => updateProgress("Reddit Search", current, total, `r/${subreddit}`)
@@ -322,7 +322,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             (current, total, term) => updateProgress("arXiv Search", current, total, term)
           ),
           redditSearch.searchMultipleSubreddits(
-            devSearchTerms.relevantSubreddits?.slice(0, searchConfig.redditSubredditsLimit) || ["MachineLearning", "artificial", "ChatGPT", "OpenAI", "singularity", "cscareerquestions", "programming", "LegalAdvice", "consulting", "productivity"], 
+            devSearchTerms.relevantSubreddits?.map((s: string) => s.replace(/^r\//, '')).slice(0, searchConfig.redditSubredditsLimit) || ["MachineLearning", "artificial", "ChatGPT", "OpenAI", "singularity", "cscareerquestions", "programming", "LegalAdvice", "consulting", "productivity"], 
             searchConfig.redditPostsPerSubreddit,
             searchConfig.redditCommentsPerPost,
             (current, total, subreddit) => updateProgress("Reddit Search", current, total, `r/${subreddit}`)
