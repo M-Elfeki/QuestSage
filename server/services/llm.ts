@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
 import Anthropic from '@anthropic-ai/sdk';
 import { configService } from "./config";
-import { geminiRateLimiter } from "./rate-limiter";
+import { geminiRateLimiter, truncateLog } from "./rate-limiter";
 
 export interface LLMResponse {
   response: string;
@@ -1107,13 +1107,151 @@ Respond in JSON format:
   }> {
     await this.delay(300);
     
-    // Alignment check disabled - always return proceed
+    // Simple heuristic-based alignment check for dev mode
+    const recentMessages = conversationHistory.slice(-4); // Last 2 rounds
+    
+    // Check for potential drift indicators
+    const driftIndicators = {
+      tangentialTopics: 0,
+      methodologyFocus: 0,
+      abstractionLevel: 0,
+      offTopicDiscussion: 0
+    };
+    
+    // Analyze recent messages for drift patterns
+    recentMessages.forEach(msg => {
+      const content = msg.message?.toLowerCase() || '';
+      
+      // Check for excessive methodology discussion
+      if (content.includes('methodology') || content.includes('approach') || content.includes('framework')) {
+        driftIndicators.methodologyFocus++;
+      }
+      
+      // Check for overly abstract discussion
+      if (content.includes('theoretical') || content.includes('philosophical') || content.includes('conceptual')) {
+        driftIndicators.abstractionLevel++;
+      }
+      
+      // Simple keyword check for original intent alignment
+      const intentKeywords = userIntent?.query?.toLowerCase().split(' ') || [];
+      const matchCount = intentKeywords.filter((keyword: string) => 
+        keyword.length > 3 && content.includes(keyword)
+      ).length;
+      
+      if (matchCount < 2) {
+        driftIndicators.offTopicDiscussion++;
+      }
+    });
+    
+    // Determine risk level and action
+    const totalDriftScore = Object.values(driftIndicators).reduce((a, b) => a + b, 0);
+    
+    if (totalDriftScore >= 6 && currentRound >= 3) {
+      const originalQuery = userIntent?.query || 'your research question';
+      const clarifiedIntent = userIntent?.clarifiedIntent || userIntent?.query || originalQuery;
+      
+      return {
+        isAligned: false,
+        riskLevel: 'high',
+        driftAreas: [
+          "Discussion becoming too abstract without practical relevance",
+          "Agents focusing on methodology rather than addressing the core question"
+        ],
+        checkpointQuestion: `
+🔄 **Alignment Check Required**
+
+**Original Question:** "${originalQuery}"
+
+**Current Situation:** After ${currentRound} rounds of dialogue, the agents have drifted into abstract theoretical discussions and methodological debates rather than addressing your core research question.
+
+**Decision Needed:** How would you like to redirect the conversation for the remaining ${7 - currentRound} rounds?
+
+**Options to Consider:**
+• Refocus on practical, real-world applications and examples
+• Dive deeper into specific aspects of your original question
+• Explore a particular angle that emerged but wasn't fully developed
+• Request concrete evidence and case studies
+
+**Please provide guidance:** What specific aspect or direction should the agents prioritize?`.trim(),
+        recommendAction: 'clarify'
+      };
+    }
+    
+    if (totalDriftScore >= 4 && currentRound >= 2) {
+      const originalQuery = userIntent?.query || 'your research question';
+      const recentTopics = this.extractRecentTopics(conversationHistory.slice(-4));
+      
+      return {
+        isAligned: false,
+        riskLevel: 'medium',
+        driftAreas: ["Some tangential exploration detected"],
+        checkpointQuestion: `
+🎯 **Course Correction Opportunity**
+
+**Your Research Question:** "${originalQuery}"
+
+**Progress So Far:** Round ${currentRound} of 7
+
+**Observation:** The agents have begun exploring some tangential topics:
+${recentTopics.map(t => `• ${t}`).join('\n')}
+
+**Your Input Needed:** Would you like to:
+1. Continue exploring these emerging themes
+2. Return focus to your original question
+3. Narrow down to a specific subtopic
+
+**Please specify:** Which direction best serves your research goals?`.trim(),
+        recommendAction: 'clarify'
+      };
+    }
+    
+    // Default: proceed
     return {
       isAligned: true,
       riskLevel: 'low',
       driftAreas: [],
       recommendAction: 'proceed'
     };
+  }
+
+  private extractRecentTopics(recentMessages: any[]): string[] {
+    const topics: string[] = [];
+    
+    recentMessages.forEach(msg => {
+      const content = msg.message || '';
+      
+      // Extract key topics using simple pattern matching
+      const topicPatterns = [
+        /discussing\s+([^.]+)/i,
+        /exploring\s+([^.]+)/i,
+        /focused on\s+([^.]+)/i,
+        /analysis of\s+([^.]+)/i,
+        /implications for\s+([^.]+)/i
+      ];
+      
+      topicPatterns.forEach(pattern => {
+        const match = content.match(pattern);
+        if (match && match[1]) {
+          const topic = match[1].trim();
+          if (topic.length > 10 && topic.length < 100 && !topics.includes(topic)) {
+            topics.push(topic);
+          }
+        }
+      });
+    });
+    
+    // If no topics found through patterns, extract from content
+    if (topics.length === 0) {
+      recentMessages.slice(-2).forEach(msg => {
+        const content = msg.message || '';
+        const sentences = content.split('.').filter((s: string) => s.trim().length > 20);
+        if (sentences.length > 0) {
+          topics.push(sentences[0].trim().substring(0, 80) + '...');
+        }
+      });
+    }
+    
+    return topics.slice(0, 3); // Return top 3 topics
   }
 
   private delay(ms: number): Promise<void> {
@@ -1678,6 +1816,7 @@ Respond in JSON format:
     reason: string;
     successCriteriaStatus: any;
     insightStagnationDetected: boolean;
+    successCriteriaCompletionPercentage?: number;
   }> {
     if (configService.isRealMode() && this.anthropic) {
       return await this.realEvaluateDialogueRound(context);
@@ -1693,6 +1832,7 @@ Respond in JSON format:
     reason: string;
     successCriteriaStatus: any;
     insightStagnationDetected: boolean;
+    successCriteriaCompletionPercentage?: number;
   }> {
     if (!this.anthropic) throw new Error("Anthropic not configured");
     
@@ -1705,37 +1845,52 @@ CONTEXT:
 - Current Round: ${context.roundNumber || 0}
 - Max Rounds: 7
 
+CRITICAL INSTRUCTION: **YOU MUST EXPLICITLY CHECK EACH SUCCESS CRITERION** before making your decision.
+
 EVALUATION DECISION TREE:
 
-**CONCLUDE** if:
-- Success criteria satisfied (comprehensive exploration achieved)
-- High-confidence answer emerged with strong evidence
-- Maximum rounds reached (7)
-- No new insights emerging for 2+ rounds
+**CONCLUDE** if ANY of these conditions are met:
+1. ALL success criteria are satisfied (status: "completed") - this is the PRIMARY condition
+2. 80% or more of success criteria are completed AND remaining ones show no progress potential
+3. High-confidence answer emerged with strong evidence addressing all key dimensions
+4. Maximum rounds reached (7) - automatic conclusion
+5. No new insights emerging for 2+ rounds (insight stagnation detected)
 
-**CONTINUE** if:
-- Significant knowledge gaps remain unexplored
-- Agents discovering new important dimensions
-- Evidence conflicts require deeper analysis
-- Under maximum round limit with active insight generation
+**CONTINUE** only if ALL of these conditions are true:
+1. At least one success criterion remains incomplete or partially addressed
+2. Agents are still discovering new important dimensions
+3. Recent rounds show meaningful progress on success criteria
+4. Under maximum round limit with active insight generation
+5. Evidence conflicts or knowledge gaps can be addressed with more dialogue
+
+SUCCESS CRITERIA EVALUATION REQUIREMENTS:
+- For EACH criterion provided, assess its current status based on dialogue content
+- Status definitions:
+  * "completed": Criterion fully addressed with sufficient evidence/exploration
+  * "partial": Some progress made but more exploration needed
+  * "not_started": No meaningful exploration of this criterion yet
+- Provide specific evidence from dialogue supporting each status assessment
+- If a criterion seems vague, interpret it in context of the research question
 
 RESPONSE REQUIREMENTS:
-1. Evaluate each success criterion with current status
-2. Detect insight stagnation by comparing recent rounds
-3. Assess if agents are exploring different dimensions
-4. Provide specific feedback and questions for next round if continuing
+1. Start by evaluating EACH success criterion individually
+2. Base your decision PRIMARILY on success criteria completion
+3. Detect insight stagnation by comparing recent rounds
+4. Provide specific feedback targeting incomplete criteria if continuing
+5. Questions should directly address gaps in success criteria
 
 Respond in JSON format:
 {
   "decision": "continue|conclude",
-  "feedback": ["specific feedback for agents"],
-  "questions": ["targeted questions to push exploration"],
-  "reason": "detailed explanation of decision",
+  "feedback": ["specific feedback for agents focusing on incomplete success criteria"],
+  "questions": ["targeted questions to address specific gaps in success criteria"],
+  "reason": "detailed explanation emphasizing success criteria status in decision",
   "successCriteriaStatus": {
-    "criterion1": {"status": "completed|partial|not_started", "evidence": "explanation"},
-    "criterion2": {"status": "completed|partial|not_started", "evidence": "explanation"}
+    "criterion1_key": {"status": "completed|partial|not_started", "evidence": "specific evidence from dialogue"},
+    "criterion2_key": {"status": "completed|partial|not_started", "evidence": "specific evidence from dialogue"}
   },
-  "insightStagnationDetected": true/false
+  "insightStagnationDetected": true/false,
+  "successCriteriaCompletionPercentage": 0-100
 }`;
 
     const response = await this.anthropic.messages.create({
@@ -1759,6 +1914,7 @@ Respond in JSON format:
     reason: string;
     successCriteriaStatus: any;
     insightStagnationDetected: boolean;
+    successCriteriaCompletionPercentage?: number;
   }> {
     await this.delay(1000);
     
@@ -1772,42 +1928,70 @@ Respond in JSON format:
     // Detect insight stagnation
     const insightStagnationDetected = this.detectInsightStagnation(dialogueHistory, roundsCompleted);
     
-    // Decision logic following specification
+    // Calculate success criteria completion percentage
+    const completedCriteria = Object.values(successCriteriaStatus).filter(
+      (criterion: any) => criterion.status === 'completed'
+    ).length;
+    const totalCriteria = Object.keys(successCriteriaStatus).length;
+    const completionPercentage = totalCriteria > 0 ? Math.round((completedCriteria / totalCriteria) * 100) : 0;
+    
+    // Decision logic following specification with emphasis on success criteria
+    
+    // Check PRIMARY condition first - ALL success criteria completed
+    if (completionPercentage === 100) {
+      return {
+        decision: "conclude",
+        feedback: [],
+        questions: [],
+        reason: "All success criteria have been satisfied - comprehensive exploration achieved",
+        successCriteriaStatus,
+        insightStagnationDetected,
+        successCriteriaCompletionPercentage: completionPercentage
+      };
+    }
+    
+    // Check maximum rounds
     if (roundsCompleted >= maxRounds) {
       return {
         decision: "conclude",
         feedback: [],
         questions: [],
-        reason: "Maximum rounds reached (7)",
+        reason: `Maximum rounds reached (7) with ${completionPercentage}% of success criteria completed`,
         successCriteriaStatus,
-        insightStagnationDetected
+        insightStagnationDetected,
+        successCriteriaCompletionPercentage: completionPercentage
       };
     }
     
+    // Check 80% completion threshold
+    if (completionPercentage >= 80) {
+      const partialCriteria = Object.values(successCriteriaStatus).filter(
+        (criterion: any) => criterion.status === 'partial'
+      ).length;
+      
+      if (partialCriteria === 0) { // No more progress possible
+        return {
+          decision: "conclude",
+          feedback: [],
+          questions: [],
+          reason: `${completionPercentage}% of success criteria completed with no further progress potential`,
+          successCriteriaStatus,
+          insightStagnationDetected,
+          successCriteriaCompletionPercentage: completionPercentage
+        };
+      }
+    }
+    
+    // Check insight stagnation
     if (insightStagnationDetected && roundsCompleted >= 3) {
       return {
         decision: "conclude",
         feedback: [],
         questions: [],
-        reason: "No new insights emerging for 2+ rounds",
+        reason: `No new insights emerging for 2+ rounds. ${completionPercentage}% of success criteria completed`,
         successCriteriaStatus,
-        insightStagnationDetected
-      };
-    }
-    
-    const completedCriteria = Object.values(successCriteriaStatus).filter(
-      (criterion: any) => criterion.status === 'completed'
-    ).length;
-    const totalCriteria = Object.keys(successCriteriaStatus).length;
-    
-    if (completedCriteria >= totalCriteria * 0.8) { // 80% completion threshold
-      return {
-        decision: "conclude",
-        feedback: [],
-        questions: [],
-        reason: "Success criteria substantially satisfied (comprehensive exploration achieved)",
-        successCriteriaStatus,
-        insightStagnationDetected
+        insightStagnationDetected,
+        successCriteriaCompletionPercentage: completionPercentage
       };
     }
     
@@ -1815,9 +1999,10 @@ Respond in JSON format:
       decision: "continue",
       feedback: this.generateContinueFeedback(successCriteriaStatus, roundsCompleted),
       questions: this.generateTargetedQuestions(successCriteriaStatus, context),
-      reason: "Significant knowledge gaps remain unexplored and agents are discovering new dimensions",
+      reason: `Continuing dialogue to complete remaining success criteria. Currently ${completionPercentage}% completed with active progress on incomplete criteria`,
       successCriteriaStatus,
-      insightStagnationDetected
+      insightStagnationDetected,
+      successCriteriaCompletionPercentage: completionPercentage
     };
   }
   
@@ -2014,8 +2199,16 @@ Respond in JSON format:
     }
   ],
   "confidenceInterval": [0.72, 0.88],
-  "synthesis": "comprehensive markdown-formatted final synthesis report"
-}`;
+  "synthesis": "comprehensive final synthesis report in MARKDOWN format with proper headers, lists, emphasis"
+}
+
+SYNTHESIS FORMATTING REQUIREMENTS:
+- The "synthesis" field MUST be in full Markdown format
+- Use proper headers (# ## ###) for sections
+- Use bullet points and numbered lists where appropriate
+- Use **bold** for emphasis and *italics* for secondary emphasis
+- Include clear section breaks and logical organization
+- Make it visually scannable and professionally formatted`;
 
     const response = await this.anthropic.messages.create({
       model: "claude-3-opus-20240229",

@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
 import { configService } from "./config";
-import { geminiRateLimiter } from "./rate-limiter";
+import { geminiRateLimiter, truncateLog } from "./rate-limiter";
 
 export interface AgentResponse {
   content: string;
@@ -48,9 +48,8 @@ export class ChatGPTAgent {
         model: "gemini-2.5-flash",
         contents: prompt
       });
-      console.log("✅ AGENT: Gemini Flash 2.5 responded successfully");
-      
       const textResponse = response.text;
+      console.log(`✅ AGENT: Gemini Flash 2.5 responded successfully - Preview: "${truncateLog(textResponse || 'No response')}"`);
       
       // For agent responses, we don't necessarily need JSON, return the text content
       return {
@@ -272,9 +271,8 @@ export class GeminiAgent {
         model: "gemini-2.5-flash",
         contents: prompt
       });
-      console.log("✅ AGENT: Gemini Flash 2.5 responded successfully");
-      
       const textResponse = response.text;
+      console.log(`✅ AGENT: Gemini Flash 2.5 responded successfully - Preview: "${truncateLog(textResponse || 'No response')}"`);
       
       // For agent responses, we don't necessarily need JSON, return the text content
       return {

@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { apiRequest } from "@/lib/queryClient";
 import ReactMarkdown from "react-markdown";
+import { AlignmentDialog } from "@/components/ui/alignment-dialog";
 
 interface DialogueInterfaceProps {
   sessionId: string | null;
@@ -10,16 +11,23 @@ interface DialogueInterfaceProps {
   researchData?: any;
   agentConfigs?: any;
   successCriteria?: string[];
+  userIntent?: any;
   status?: 'pending' | 'active' | 'completed';
   onComplete: (dialogueHistory: any[]) => void;
 }
 
-export default function DialogueInterface({ sessionId, isDevMode = true, researchData, agentConfigs, successCriteria = [], status = 'active', onComplete }: DialogueInterfaceProps) {
+export default function DialogueInterface({ sessionId, isDevMode = true, researchData, agentConfigs, successCriteria = [], userIntent, status = 'active', onComplete }: DialogueInterfaceProps) {
   const [currentRound, setCurrentRound] = useState(1);
   const [maxRounds] = useState(7);
   const [dialogueHistory, setDialogueHistory] = useState<any[]>([]);
   const [lastSteering, setLastSteering] = useState<{ feedback: string[]; questions: string[] } | null>(null);
   const [successCriteriaStatus, setSuccessCriteriaStatus] = useState<Record<string, any>>({});
+  const [alignmentDialog, setAlignmentDialog] = useState<{
+    open: boolean;
+    question: string;
+    driftAreas: string[];
+  }>({ open: false, question: "", driftAreas: [] });
+  const [userAlignmentAnswer, setUserAlignmentAnswer] = useState<string | null>(null);
 
   const { data: dialogues } = useQuery({
     queryKey: ["/api/research-sessions", sessionId, "dialogues"],
@@ -66,15 +74,19 @@ export default function DialogueInterface({ sessionId, isDevMode = true, researc
         try {
           const alignmentCheck = await apiRequest("POST", "/api/check-alignment", {
             conversationHistory: dialogueHistory,
-            userIntent: { /* would include user context */ },
+            userIntent: userIntent || { query: "Research query" },
             currentRound
           }).then(res => res.json());
           
           if (alignmentCheck.recommendAction === 'clarify') {
-            // Show checkpoint question to user and halt dialogue
-            console.error('Alignment check requires clarification:', alignmentCheck.checkpointQuestion);
-            alert(`Alignment Issue Detected:\n\n${alignmentCheck.checkpointQuestion || 'The dialogue has drifted from your original intent.'}\n\nDialogue has been paused for realignment.`);
-            // Stop the dialogue - do not continue
+            // Show alignment dialog to user and halt dialogue
+            console.log('Alignment check requires clarification:', alignmentCheck.checkpointQuestion);
+            setAlignmentDialog({
+              open: true,
+              question: alignmentCheck.checkpointQuestion || 'How would you like to refocus the dialogue to better address your original question?',
+              driftAreas: alignmentCheck.driftAreas || []
+            });
+            // Stop the dialogue - do not continue until user responds
             return;
           }
           
@@ -108,6 +120,18 @@ export default function DialogueInterface({ sessionId, isDevMode = true, researc
   const startDialogueRound = () => {
     if (!sessionId) return;
 
+    const steeringData = lastSteering ? { ...lastSteering } : {};
+    
+    // If user provided alignment feedback, add it to the steering
+    if (userAlignmentAnswer) {
+      steeringData.feedback = [
+        ...(steeringData.feedback || []),
+        `User alignment guidance: ${userAlignmentAnswer}`
+      ];
+      // Clear the alignment answer after using it
+      setUserAlignmentAnswer(null);
+    }
+
     agentDialogueMutation.mutate({
       sessionId,
       roundNumber: currentRound,
@@ -118,9 +142,22 @@ export default function DialogueInterface({ sessionId, isDevMode = true, researc
       context: { 
         dialogueHistory,
         researchData: researchData || {},
-        steering: lastSteering || undefined
+        steering: Object.keys(steeringData).length > 0 ? steeringData : undefined
       }
     });
+  };
+
+  const handleAlignmentAnswer = (answer: string) => {
+    setUserAlignmentAnswer(answer);
+    setAlignmentDialog({ open: false, question: "", driftAreas: [] });
+    
+    // Continue with the next round after user provides alignment feedback
+    setCurrentRound(prev => prev + 1);
+    
+    // Start the next round with the user's feedback
+    setTimeout(() => {
+      startDialogueRound();
+    }, 500);
   };
 
   useEffect(() => {
@@ -359,6 +396,15 @@ export default function DialogueInterface({ sessionId, isDevMode = true, researc
           Pause Dialogue
         </Button>
       </div>
+
+      {/* Alignment Dialog */}
+      <AlignmentDialog
+        open={alignmentDialog.open}
+        onOpenChange={(open) => setAlignmentDialog(prev => ({ ...prev, open }))}
+        question={alignmentDialog.question}
+        driftAreas={alignmentDialog.driftAreas}
+        onAnswer={handleAlignmentAnswer}
+      />
     </div>
   );
 }

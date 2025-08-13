@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useEffect } from "react";
+import ReactMarkdown from "react-markdown";
 
 interface SynthesisResultsProps {
   sessionId: string | null;
@@ -186,9 +187,26 @@ The transformation of knowledge work by LLMs is not a question of "if" but "when
               <i className="fas fa-star text-emerald-600 mr-2"></i>
               Final Synthesis
             </h3>
-            <p className="text-emerald-800 leading-relaxed">
-              {synthesisData}
-            </p>
+            <div className="prose prose-emerald max-w-none">
+              <ReactMarkdown 
+                components={{
+                  h1: ({ children }) => <h1 className="text-2xl font-bold text-emerald-900 mb-4 mt-6 first:mt-0">{children}</h1>,
+                  h2: ({ children }) => <h2 className="text-xl font-semibold text-emerald-800 mb-3 mt-5">{children}</h2>,
+                  h3: ({ children }) => <h3 className="text-lg font-semibold text-emerald-800 mb-2 mt-4">{children}</h3>,
+                  p: ({ children }) => <p className="text-emerald-800 leading-relaxed mb-3">{children}</p>,
+                  ul: ({ children }) => <ul className="list-disc list-inside text-emerald-800 mb-3 space-y-1">{children}</ul>,
+                  ol: ({ children }) => <ol className="list-decimal list-inside text-emerald-800 mb-3 space-y-1">{children}</ol>,
+                  li: ({ children }) => <li className="text-emerald-800">{children}</li>,
+                  strong: ({ children }) => <strong className="font-semibold text-emerald-900">{children}</strong>,
+                  em: ({ children }) => <em className="italic">{children}</em>,
+                  blockquote: ({ children }) => <blockquote className="border-l-4 border-emerald-300 pl-4 italic text-emerald-700 my-4">{children}</blockquote>,
+                  code: ({ children }) => <code className="bg-emerald-100 px-1.5 py-0.5 rounded text-sm font-mono text-emerald-900">{children}</code>,
+                  pre: ({ children }) => <pre className="bg-emerald-50 p-4 rounded-lg overflow-x-auto mb-3">{children}</pre>,
+                }}
+              >
+                {synthesisData}
+              </ReactMarkdown>
+            </div>
           </div>
 
           {/* Action Buttons */}
@@ -233,9 +251,26 @@ The transformation of knowledge work by LLMs is not a question of "if" but "when
             <i className="fas fa-summary text-blue-600 mr-2"></i>
             Executive Summary
           </h3>
-          <p className="text-sm text-blue-800" data-testid="text-executive-summary">
-            {synthesisData}
-          </p>
+          <div className="prose prose-sm prose-blue max-w-none" data-testid="text-executive-summary">
+            <ReactMarkdown 
+              components={{
+                h1: ({ children }) => <h1 className="text-lg font-bold text-blue-900 mb-3 mt-4 first:mt-0">{children}</h1>,
+                h2: ({ children }) => <h2 className="text-base font-semibold text-blue-800 mb-2 mt-3">{children}</h2>,
+                h3: ({ children }) => <h3 className="text-sm font-semibold text-blue-800 mb-1.5 mt-2">{children}</h3>,
+                p: ({ children }) => <p className="text-sm text-blue-800 mb-2">{children}</p>,
+                ul: ({ children }) => <ul className="list-disc list-inside text-sm text-blue-800 mb-2 space-y-0.5">{children}</ul>,
+                ol: ({ children }) => <ol className="list-decimal list-inside text-sm text-blue-800 mb-2 space-y-0.5">{children}</ol>,
+                li: ({ children }) => <li className="text-sm text-blue-800">{children}</li>,
+                strong: ({ children }) => <strong className="font-semibold text-blue-900">{children}</strong>,
+                em: ({ children }) => <em className="italic">{children}</em>,
+                blockquote: ({ children }) => <blockquote className="border-l-3 border-blue-300 pl-3 italic text-blue-700 my-2">{children}</blockquote>,
+                code: ({ children }) => <code className="bg-blue-100 px-1 py-0.5 rounded text-xs font-mono text-blue-900">{children}</code>,
+                pre: ({ children }) => <pre className="bg-blue-50 p-3 rounded overflow-x-auto mb-2 text-xs">{children}</pre>,
+              }}
+            >
+              {synthesisData}
+            </ReactMarkdown>
+          </div>
         </div>
 
         {Array.isArray(synthesis.evidenceFoundation) && synthesis.evidenceFoundation.length > 0 && (

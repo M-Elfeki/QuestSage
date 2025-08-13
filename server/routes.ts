@@ -8,7 +8,7 @@ import { ChatGPTAgent, GeminiAgent } from "./services/agents";
 import { WebScrapingService, ArxivSearchService, RedditSearchService, PerplexityService } from "./services/search";
 import { configService } from "./services/config";
 import { devWorkflowService } from "./services/dev-workflow";
-import { tempStorage } from "./services/rate-limiter";
+import { tempStorage, truncateLog } from "./services/rate-limiter";
 
 const flashLLM = new FlashLLMService();
 const proLLM = new ProLLMService();
@@ -129,7 +129,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         const updateProgress = (step: string, current: number, total: number, item: string) => {
           completedSteps = current;
-          console.log(`📊 Progress: ${step} - ${current}/${total} (${item})`);
+          console.log(`📊 Progress: ${step} - ${current}/${total} (${truncateLog(item)})`);
         };
 
         // Get configurable search parameters
@@ -156,6 +156,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ]);
 
         console.log(`✅ Expanded search completed: ${webResults.length} web, ${arxivResults.length} arXiv, ${redditResults.length} Reddit results`);
+
+        // Save individual search results to temp directory
+        await tempStorage.saveWebSearchResults(sessionId || 'unknown', { results: webResults, timestamp: new Date().toISOString() });
+        await tempStorage.saveArxivSearchResults(sessionId || 'unknown', { results: arxivResults, timestamp: new Date().toISOString() });
+        await tempStorage.saveRedditSearchResults(sessionId || 'unknown', { results: redditResults, timestamp: new Date().toISOString() });
 
         const allResults = [
           ...webResults.map((r: any) => ({ ...r, sourceType: "surface" })),
@@ -254,7 +259,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           orchestration
         };
         
-        const tempFilePath = await tempStorage.saveSurfaceSearchResults(sessionId, tempResearchData);
+        const tempFilePath = await tempStorage.saveSurfaceSearchResults(sessionId || 'unknown', tempResearchData);
         console.log(`💾 Surface research data saved to: ${tempFilePath}`);
         
         // Stage 2.4: Generate Surface Research Report BEFORE deep research
@@ -268,6 +273,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           },
           clarifiedIntent
         );
+        
+        // Save surface research report to temp directory
+        await tempStorage.saveSurfaceResearchReport(sessionId || 'unknown', surfaceResearchReport);
         
         res.json({
           searchResults: {
@@ -298,7 +306,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         const updateProgress = (step: string, current: number, total: number, item: string) => {
           completedSteps = current;
-          console.log(`📊 DEV Progress: ${step} - ${current}/${total} (${item})`);
+          console.log(`📊 DEV Progress: ${step} - ${current}/${total} (${truncateLog(item)})`);
         };
 
         // Run expanded searches with configurable parameters
@@ -322,6 +330,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ]);
 
         console.log(`✅ DEV MODE: Expanded search completed: ${webResults.length} web, ${arxivResults.length} arXiv, ${redditResults.length} Reddit results`);
+
+        // Save individual search results to temp directory
+        await tempStorage.saveWebSearchResults(sessionId || 'unknown', { results: webResults, timestamp: new Date().toISOString() });
+        await tempStorage.saveArxivSearchResults(sessionId || 'unknown', { results: arxivResults, timestamp: new Date().toISOString() });
+        await tempStorage.saveRedditSearchResults(sessionId || 'unknown', { results: redditResults, timestamp: new Date().toISOString() });
 
         const allResults = [
           ...webResults.map((r: any) => ({ ...r, sourceType: "surface" })),
@@ -407,7 +420,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           orchestration
         };
         
-        const tempFilePath = await tempStorage.saveSurfaceSearchResults(sessionId, tempResearchData);
+        const tempFilePath = await tempStorage.saveSurfaceSearchResults(sessionId || 'unknown', tempResearchData);
         console.log(`💾 DEV MODE: Surface research data saved to: ${tempFilePath}`);
         
         // Stage 2.4: Generate Surface Research Report BEFORE deep research
@@ -427,6 +440,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           },
           clarifiedIntent
         );
+        
+        // Save surface research report to temp directory
+        await tempStorage.saveSurfaceResearchReport(sessionId || 'unknown', surfaceResearchReport);
 
         // Stage 2.5: Save complete surface search report to ./temp/surface-search.json
         console.log(`🔄 Preparing complete surface search report for session: ${sessionId}`);

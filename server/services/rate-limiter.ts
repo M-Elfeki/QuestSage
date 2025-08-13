@@ -2,6 +2,12 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 
+// Helper function to truncate log messages
+export function truncateLog(message: string, maxLength: number = 200): string {
+  if (!message) return '';
+  return message.length > maxLength ? message.substring(0, maxLength) + '...' : message;
+}
+
 // Rate Limiter for API calls with enhanced retry logic for quota exceeded errors
 class RateLimiter {
   private callCounts: Map<string, { count: number; resetTime: number }> = new Map();
@@ -98,8 +104,8 @@ class TempStorage {
   private tempDir: string;
 
   constructor() {
-    // Use system temp directory or a local temp folder
-    this.tempDir = path.join(os.tmpdir(), 'questsage-temp');
+    // Use local temp folder in QuestSage directory
+    this.tempDir = path.join(process.cwd(), 'temp');
   }
 
   async ensureTempDir() {
@@ -126,6 +132,70 @@ class TempStorage {
     }
   }
 
+  async saveWebSearchResults(sessionId: string, data: any): Promise<string> {
+    await this.ensureTempDir();
+    
+    const filename = `web-search-${sessionId}-${Date.now()}.json`;
+    const filePath = path.join(this.tempDir, filename);
+    
+    try {
+      await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
+      console.log(`📁 Saved web search results to: ${filePath}`);
+      return filePath;
+    } catch (error) {
+      console.error("Error saving web search results:", error);
+      throw error;
+    }
+  }
+
+  async saveRedditSearchResults(sessionId: string, data: any): Promise<string> {
+    await this.ensureTempDir();
+    
+    const filename = `reddit-search-${sessionId}-${Date.now()}.json`;
+    const filePath = path.join(this.tempDir, filename);
+    
+    try {
+      await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
+      console.log(`📁 Saved Reddit search results to: ${filePath}`);
+      return filePath;
+    } catch (error) {
+      console.error("Error saving Reddit search results:", error);
+      throw error;
+    }
+  }
+
+  async saveArxivSearchResults(sessionId: string, data: any): Promise<string> {
+    await this.ensureTempDir();
+    
+    const filename = `arxiv-search-${sessionId}-${Date.now()}.json`;
+    const filePath = path.join(this.tempDir, filename);
+    
+    try {
+      await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
+      console.log(`📁 Saved arXiv search results to: ${filePath}`);
+      return filePath;
+    } catch (error) {
+      console.error("Error saving arXiv search results:", error);
+      throw error;
+    }
+  }
+
+  async saveSurfaceResearchReport(sessionId: string, data: any): Promise<string> {
+    await this.ensureTempDir();
+    
+    const filename = `surface-research-report-${sessionId}-${Date.now()}.json`;
+    const filePath = path.join(this.tempDir, filename);
+    
+    try {
+      await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
+      console.log(`📁 Saved surface research report to: ${filePath}`);
+      return filePath;
+    } catch (error) {
+      console.error("Error saving surface research report:", error);
+      throw error;
+    }
+  }
+
   async loadSurfaceSearchResults(filePath: string): Promise<any> {
     try {
       const data = await fs.readFile(filePath, 'utf-8');
@@ -144,7 +214,12 @@ class TempStorage {
       const cutoffTime = Date.now() - (maxAgeHours * 60 * 60 * 1000);
       
       for (const file of files) {
-        if (file.startsWith('surface-research-')) {
+        // Clean up all types of temp files
+        if (file.startsWith('surface-research-') || 
+            file.startsWith('web-search-') || 
+            file.startsWith('reddit-search-') || 
+            file.startsWith('arxiv-search-') ||
+            file.startsWith('surface-research-report-')) {
           const filePath = path.join(this.tempDir, file);
           try {
             const stats = await fs.stat(filePath);

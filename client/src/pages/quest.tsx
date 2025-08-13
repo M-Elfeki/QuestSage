@@ -228,6 +228,7 @@ export default function Quest() {
                   status={getStageStatus("dialogue")}
                   agentConfigs={agentSelection ? { chatgpt: agentSelection.chatgptConfig, gemini: agentSelection.geminiConfig } : undefined}
                   successCriteria={agentSelection?.successCriteria || []}
+                  userIntent={clarifiedIntent}
                   onComplete={(history) => {
                     setDialoguesForSynthesis(history);
                     completeStage("dialogue", "synthesis");

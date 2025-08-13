@@ -1,4 +1,5 @@
 import { configService } from "./config";
+import { truncateLog } from "./rate-limiter";
 
 export interface SearchResult {
   id: string;
@@ -42,7 +43,7 @@ export class WebScrapingService {
       }
       
       try {
-        console.log(`🔍 Web searching term ${i + 1}/${searchTerms.length}: "${term}"`);
+        console.log(`🔍 Web searching term ${i + 1}/${searchTerms.length}: "${truncateLog(term)}"`);
         
         if (configService.isRealMode()) {
           const termResults = await this.realSearch(term, maxResultsPerTerm);
@@ -96,7 +97,7 @@ export class WebScrapingService {
     }
 
     query = query.trim();
-    console.log(`Web scraping search for: ${query}`);
+    console.log(`Web scraping search for: ${truncateLog(query)}`);
 
     const searchResults: Map<string, string> = new Map();
     
@@ -132,9 +133,9 @@ export class WebScrapingService {
       }
     }
 
-    // Convert to SearchResult format
-    const validatedResults = this.validateAndFormatResults(searchResults, count);
-    console.log(`Web scraper found ${validatedResults.length} valid results`);
+    // Convert to SearchResult format with full content retrieval
+    const validatedResults = await this.validateAndFormatResultsWithFullContent(searchResults, count);
+    console.log(`Web scraper found ${validatedResults.length} valid results with content`);
     
     return validatedResults;
   }
@@ -373,6 +374,126 @@ export class WebScrapingService {
     }
   }
 
+  private async fetchUrlContent(url: string): Promise<string | null> {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': this.userAgent,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5'
+        },
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        return null;
+      }
+
+      const html = await response.text();
+      const cheerio = await import('cheerio');
+      const $ = cheerio.load(html);
+      
+      // Remove script and style elements
+      $('script').remove();
+      $('style').remove();
+      
+      // Try to get main content from various selectors
+      let content = '';
+      const contentSelectors = [
+        'main', 'article', '[role="main"]', '.content', '#content',
+        '.post-content', '.entry-content', '.article-body', '.story-body'
+      ];
+      
+      for (const selector of contentSelectors) {
+        const element = $(selector).first();
+        if (element.length > 0) {
+          content = element.text();
+          break;
+        }
+      }
+      
+      // Fallback to body if no specific content area found
+      if (!content) {
+        content = $('body').text();
+      }
+      
+      // Clean up the content
+      content = content
+        .replace(/\s+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+      
+      // Return null if content is too short
+      if (content.length < 100) {
+        return null;
+      }
+      
+      return content.substring(0, 5000); // Limit to 5000 chars
+    } catch (error) {
+      console.error(`Failed to fetch content from ${url}:`, error);
+      return null;
+    }
+  }
+
+  private async validateAndFormatResultsWithFullContent(results: Map<string, string>, maxCount: number): Promise<SearchResult[]> {
+    const validatedResults: SearchResult[] = [];
+    let index = 0;
+    
+    for (const [url, snippet] of Array.from(results.entries())) {
+      if (validatedResults.length >= maxCount) break;
+      
+      try {
+        // Validate URL first
+        if (!this.isValidUrl(url)) continue;
+        
+        // Fetch full content from URL
+        const fullContent = await this.fetchUrlContent(url);
+        
+        // Skip if no content could be retrieved
+        if (!fullContent) {
+          console.log(`Skipping ${truncateLog(url)} - no content retrieved`);
+          continue;
+        }
+        
+        // Extract title from snippet (first line usually)
+        const lines = snippet.split('\n').filter(line => line.trim());
+        const title = lines[0] || 'Web Result';
+        
+        validatedResults.push({
+          id: `web-${Date.now()}-${index}`,
+          title: title.substring(0, 200),
+          content: fullContent,
+          url: url,
+          source: "web",
+          relevanceScore: Math.max(95 - index * 5, 50),
+          metadata: {
+            domain: this.extractDomain(url),
+            snippet: snippet,
+            contentLength: fullContent.length,
+            retrieved: new Date().toISOString()
+          }
+        });
+        
+        index++;
+        
+        // Small delay between fetches
+        if (index < maxCount) {
+          await this.delay_ms(500);
+        }
+      } catch (error) {
+        console.error(`Error processing ${truncateLog(url)}:`, error);
+        continue;
+      }
+    }
+    
+    return validatedResults;
+  }
+
   private async delay_ms(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
@@ -380,33 +501,134 @@ export class WebScrapingService {
   private async mockSearch(query: string, count: number): Promise<SearchResult[]> {
     await this.delay_ms(800);
     
+    // Simulate full content retrieval with rich, long-form content
     const mockResults = [
       {
         id: "web-1",
         title: "AI in the Workplace: Latest Research Findings",
-        content: "Recent studies show that artificial intelligence is transforming workplace productivity across multiple sectors. Employees report increased efficiency while learning to work alongside AI systems.",
+        content: `Recent studies conducted by leading research institutions have revealed transformative impacts of artificial intelligence on workplace productivity across multiple sectors. This comprehensive analysis examines data from over 500 organizations implementing AI solutions.
+
+Key Findings:
+- Productivity increases averaging 23% in knowledge work sectors
+- 67% of employees report enhanced job satisfaction when AI handles routine tasks
+- Implementation challenges include training requirements and cultural adaptation
+- ROI typically achieved within 18-24 months of deployment
+
+The research methodology involved longitudinal studies tracking organizations before and after AI implementation. Participants included technology companies, financial services, healthcare providers, and manufacturing firms. Data collection spanned 36 months, with quarterly assessments of productivity metrics, employee satisfaction, and business outcomes.
+
+Significant variations were observed across industries, with technology and financial services showing the highest productivity gains. Healthcare organizations reported improved diagnostic accuracy and patient outcomes, while manufacturing saw reductions in defect rates and improved supply chain efficiency.
+
+Employee perspectives revealed initial apprehension followed by growing acceptance as familiarity increased. Training programs proved crucial for successful adoption, with organizations investing in comprehensive upskilling initiatives showing better outcomes. The study also identified key success factors including executive sponsorship, clear communication strategies, and phased implementation approaches.
+
+Future implications suggest continued evolution of human-AI collaboration models, with emphasis on augmentation rather than replacement. Organizations are advised to focus on change management, continuous learning, and ethical considerations in their AI adoption strategies.`.trim(),
         url: "https://example.com/ai-workplace-research",
         source: "web",
         relevanceScore: 95,
-        metadata: { domain: "example.com", contentLength: 150, scrapedAt: new Date().toISOString() }
+        metadata: { 
+          domain: "example.com", 
+          contentLength: 2145, 
+          scrapedAt: new Date().toISOString(),
+          snippet: "Recent studies show that artificial intelligence is transforming workplace productivity across multiple sectors."
+        }
       },
       {
         id: "web-2", 
         title: "Machine Learning Applications in Knowledge Work",
-        content: "Organizations worldwide are implementing machine learning tools to enhance knowledge worker productivity. Early adopters report significant gains in data analysis and decision-making processes.",
+        content: `Organizations worldwide are implementing machine learning tools to enhance knowledge worker productivity, with early adopters reporting significant gains in data analysis and decision-making processes. This detailed report examines real-world implementations and outcomes.
+
+Executive Summary:
+Machine learning (ML) technologies are revolutionizing how knowledge workers approach complex tasks. From automated data analysis to predictive modeling, ML tools are becoming integral to modern workplace operations. This report synthesizes findings from 200+ case studies across various industries.
+
+Implementation Patterns:
+1. Data Analysis and Insights
+   - Automated pattern recognition in large datasets
+   - Predictive analytics for business forecasting
+   - Anomaly detection in financial transactions
+   - Customer behavior analysis and segmentation
+
+2. Decision Support Systems
+   - Risk assessment and mitigation strategies
+   - Resource allocation optimization
+   - Strategic planning assistance
+   - Real-time performance monitoring
+
+3. Process Automation
+   - Document processing and classification
+   - Email categorization and response drafting
+   - Report generation and summarization
+   - Workflow optimization
+
+Case Study Highlights:
+- Financial Services Firm A: Reduced analysis time by 75% using ML-powered tools
+- Healthcare Provider B: Improved diagnostic accuracy by 32% with ML assistance
+- Retail Company C: Increased sales conversion by 45% through ML-driven recommendations
+- Manufacturing Company D: Decreased production defects by 28% using predictive maintenance
+
+Best Practices for Implementation:
+1. Start with pilot projects to demonstrate value
+2. Invest in data quality and governance
+3. Provide comprehensive training programs
+4. Establish clear metrics for success
+5. Create feedback loops for continuous improvement
+
+The report concludes that successful ML adoption requires a balanced approach combining technological capability with organizational readiness and cultural change management.`.trim(),
         url: "https://example.com/ml-knowledge-work",
         source: "web",
         relevanceScore: 88,
-        metadata: { domain: "example.com", contentLength: 180, scrapedAt: new Date().toISOString() }
+        metadata: { 
+          domain: "example.com", 
+          contentLength: 2389, 
+          scrapedAt: new Date().toISOString(),
+          snippet: "Organizations worldwide are implementing machine learning tools to enhance knowledge worker productivity."
+        }
       },
       {
         id: "web-3",
         title: "Future of Work: Human-AI Collaboration",
-        content: "Industry experts discuss the evolving landscape of human-AI collaboration, highlighting both opportunities and challenges for the modern workplace.",
+        content: `Industry experts and researchers have convened to discuss the evolving landscape of human-AI collaboration, highlighting both opportunities and challenges for the modern workplace. This comprehensive analysis presents insights from leading thinkers in technology, business, and social sciences.
+
+Introduction:
+The integration of artificial intelligence into workplace environments represents one of the most significant shifts in human history. As AI capabilities expand, the nature of work itself is being redefined. This report examines current trends, future projections, and strategic recommendations for organizations navigating this transformation.
+
+Current State of Human-AI Collaboration:
+1. Augmentation vs. Automation
+   - Most successful implementations focus on augmenting human capabilities
+   - Complete automation remains limited to specific, well-defined tasks
+   - Hybrid models show the greatest promise for productivity gains
+
+2. Emerging Collaboration Patterns
+   - AI as research assistant: gathering and synthesizing information
+   - AI as creative partner: generating ideas and alternatives
+   - AI as quality checker: identifying errors and inconsistencies
+   - AI as personal coach: providing feedback and suggestions
+
+Industry Perspectives:
+"The future workplace will be characterized by seamless human-AI partnerships where each party contributes their unique strengths," notes Dr. Sarah Chen, Director of AI Research at TechCorp.
+
+Key challenges identified include:
+- Skill gap and need for continuous learning
+- Ethical considerations in AI decision-making
+- Privacy and security concerns
+- Resistance to change and job displacement fears
+- Technical infrastructure requirements
+
+Recommendations for Organizations:
+1. Develop clear AI adoption strategies aligned with business goals
+2. Invest in employee training and reskilling programs
+3. Establish ethical guidelines for AI use
+4. Create transparent communication about AI's role
+5. Foster a culture of experimentation and learning
+
+The path forward requires thoughtful integration of AI technologies with human expertise, ensuring that technological advancement serves to enhance rather than diminish human potential in the workplace.`.trim(),
         url: "https://example.com/future-work-ai",
         source: "web",
         relevanceScore: 82,
-        metadata: { domain: "example.com", contentLength: 140, scrapedAt: new Date().toISOString() }
+        metadata: { 
+          domain: "example.com", 
+          contentLength: 2234, 
+          scrapedAt: new Date().toISOString(),
+          snippet: "Industry experts discuss the evolving landscape of human-AI collaboration."
+        }
       }
     ];
 
@@ -452,18 +674,71 @@ export class WebScrapingService {
       const template = baseResults[i];
       const id = `web-${term.slice(0, 10).replace(/\s+/g, '-')}-${i + 1}`;
       
+      // Generate full content (simulating webpage scraping)
+      const fullContent = `${template.contentTemplate.replace(/\{term\}/g, termFormatted)}
+
+This comprehensive analysis explores ${termFormatted} from multiple perspectives, drawing on extensive research and real-world case studies. The investigation encompasses theoretical frameworks, practical applications, and empirical evidence gathered from diverse sources.
+
+Background and Context:
+The emergence of ${termFormatted} represents a significant development in modern organizational practices. Historical analysis reveals a trajectory of innovation driven by technological advancement and changing workplace dynamics. Early adoption patterns suggest varying degrees of success dependent on organizational readiness and implementation strategies.
+
+Research Methodology:
+Our investigation employed mixed-methods approaches including:
+- Quantitative analysis of performance metrics across 150+ organizations
+- Qualitative interviews with industry leaders and practitioners  
+- Longitudinal studies tracking implementation outcomes over 24 months
+- Comparative analysis of different deployment models
+- Meta-analysis of existing research literature
+
+Key Findings:
+1. Implementation Success Factors
+   Organizations achieving positive outcomes with ${termFormatted} shared common characteristics including strong leadership support, clear communication strategies, and phased deployment approaches. Success rates varied significantly based on industry sector and organizational size.
+
+2. Performance Metrics
+   Measurable improvements included:
+   - Productivity gains ranging from 15% to 45%
+   - Cost reductions averaging 22% in operational expenses
+   - Quality improvements reflected in reduced error rates
+   - Enhanced employee satisfaction scores
+   - Accelerated time-to-market for new initiatives
+
+3. Challenges and Barriers
+   Common obstacles encountered during ${termFormatted} implementation:
+   - Technical infrastructure limitations
+   - Skills gaps requiring extensive training
+   - Cultural resistance to change
+   - Integration complexity with existing systems
+   - Regulatory compliance considerations
+
+Industry-Specific Applications:
+Different sectors have adapted ${termFormatted} to address unique challenges. Financial services leverage it for risk assessment and fraud detection. Healthcare applications focus on diagnostic support and treatment optimization. Manufacturing uses include predictive maintenance and quality control.
+
+Future Outlook:
+Projections indicate continued evolution of ${termFormatted} capabilities, with emerging trends pointing toward greater sophistication and broader applicability. Organizations are advised to maintain flexibility in their approach while building foundational capabilities that can adapt to future developments.
+
+Recommendations:
+Based on our analysis, we recommend organizations considering ${termFormatted} adoption to:
+1. Conduct thorough readiness assessments
+2. Develop comprehensive implementation roadmaps
+3. Invest in change management and training
+4. Establish clear success metrics
+5. Create feedback mechanisms for continuous improvement
+
+This research contributes to the growing body of knowledge surrounding ${termFormatted} and provides actionable insights for practitioners and researchers alike.`;
+
       mockResults.push({
         id,
         title: template.titleTemplate.replace(/\{term\}/g, termFormatted),
-        content: template.contentTemplate.replace(/\{term\}/g, termFormatted),
+        content: fullContent.trim(),
         url: `https://${template.domain}/${termFormatted.replace(/\s+/g, '-')}-${i + 1}`,
         source: "web",
         relevanceScore: Math.max(95 - (i * 3) - Math.floor(Math.random() * 10), 70),
         metadata: { 
           domain: template.domain, 
-          contentLength: 150 + Math.floor(Math.random() * 200), 
+          contentLength: fullContent.length, 
           scrapedAt: new Date().toISOString(),
-          searchTerm: term
+          searchTerm: term,
+          snippet: template.contentTemplate.replace(/\{term\}/g, termFormatted)
         }
       });
     }
@@ -494,7 +769,7 @@ export class ArxivSearchService {
       }
       
       try {
-        console.log(`📚 arXiv searching term ${i + 1}/${searchTerms.length}: "${term}"`);
+        console.log(`📚 arXiv searching term ${i + 1}/${searchTerms.length}: "${truncateLog(term)}"`);
         
         if (configService.isRealMode()) {
           const termResults = await this.realSearch(term, maxResultsPerTerm);
@@ -579,6 +854,14 @@ export class ArxivSearchService {
         const id = entry.id || '';
         const published = entry.published || '';
         
+        // Use abstract (summary) as content - this is the standard arXiv abstract
+        // Only use full content if abstract is empty (which is very rare)
+        let content = summary.trim();
+        if (!content) {
+          // Fallback to any other content if available
+          content = entry.content || '';
+        }
+        
         // Handle authors (can be single author or array)
         let authors: string[] = [];
         if (entry.author) {
@@ -602,7 +885,7 @@ export class ArxivSearchService {
         results.push({
           id: `arxiv-${Date.now()}-${index}`,
           title: title.trim(),
-          content: summary.trim().substring(0, 500) + (summary.length > 500 ? '...' : ''),
+          content: content, // Full abstract, not truncated
           url: id,
           source: "arxiv",
           relevanceScore: Math.max(90 - index * 3, 60),
@@ -610,7 +893,8 @@ export class ArxivSearchService {
             published: published,
             authors: authors.filter(author => author.length > 0),
             categories: categories.filter(cat => cat.length > 0),
-            arxivId: id.split('/').pop() || id
+            arxivId: id.split('/').pop() || id,
+            abstract: summary.trim() // Store original abstract in metadata
           }
         });
       });
@@ -625,29 +909,54 @@ export class ArxivSearchService {
   private async mockSearch(query: string, count: number): Promise<SearchResult[]> {
     await this.delay(1200);
     
+    // Simulate arXiv papers with full abstracts
     const mockResults = [
       {
         id: "arxiv-1",
         title: "Large Language Models and Knowledge Work: A Quantitative Analysis",
-        content: "We analyze the impact of LLMs on productivity across different knowledge work domains using a controlled study of 500 professionals...",
+        content: `We present a comprehensive quantitative analysis of Large Language Model (LLM) impact on productivity across diverse knowledge work domains. Our controlled study encompasses 500 professionals from technology, finance, healthcare, and education sectors, tracked over a 6-month period following LLM tool deployment.
+
+The study employs a randomized controlled trial design with treatment and control groups, measuring productivity through multiple validated metrics including task completion rates, quality assessments, time-to-completion, and error rates. Participants were provided with standardized LLM tools and training, with usage patterns and outcomes systematically recorded.
+
+Key findings indicate heterogeneous effects across domains and task types. Productivity gains averaged 34% for content creation tasks, 23% for data analysis, and 19% for code development. However, tasks requiring deep domain expertise showed minimal improvement (< 5%). Quality metrics revealed interesting patterns: while speed increased significantly, output quality showed mixed results depending on task complexity and user expertise level.
+
+We identify several moderating factors influencing LLM effectiveness: (1) User technical proficiency positively correlates with productivity gains (r = 0.68, p < 0.001), (2) Task ambiguity negatively impacts LLM utility, (3) Organizational support and training significantly enhance outcomes, and (4) Ethical concerns and trust issues create adoption barriers in certain contexts.
+
+The paper contributes to growing literature on AI-human collaboration by providing empirical evidence of LLM impact in real-world professional settings. Our results suggest that while LLMs offer substantial productivity benefits, their effectiveness is highly context-dependent and requires thoughtful implementation strategies. We discuss implications for workforce development, organizational design, and future research directions in human-AI collaboration.`,
         url: "https://arxiv.org/abs/2024.1234",
         source: "arxiv",
         relevanceScore: 90,
         metadata: {
           published: "2024-01-15",
-          authors: ["Smith, J.", "Johnson, K."]
+          authors: ["Smith, J.", "Johnson, K.", "Williams, R.", "Brown, L."],
+          categories: ["cs.HC", "cs.AI", "econ.GN"],
+          arxivId: "2024.1234",
+          abstract: "We present a comprehensive quantitative analysis of Large Language Model (LLM) impact on productivity across diverse knowledge work domains..."
         }
       },
       {
         id: "arxiv-2",
         title: "Employment Effects of Generative AI: Evidence from Early Adopters",
-        content: "This paper examines employment patterns in organizations that adopted generative AI tools early, finding complex substitution and complementarity effects...",
+        content: `This paper examines employment patterns in organizations that adopted generative AI tools early, revealing complex substitution and complementarity effects across different job categories. Using a difference-in-differences approach, we analyze employment data from 127 early-adopter firms compared to matched control firms over 2021-2024.
+
+Our dataset combines administrative employment records, firm-level AI adoption surveys, and detailed job task descriptions. We categorize workers into skill groups based on task content and track employment changes following AI implementation. The identification strategy exploits variation in AI adoption timing and intensity across firms.
+
+Results show nuanced employment effects that challenge simple automation narratives. While routine content generation roles decreased by 18% (SE = 2.3%), we observe 23% growth in AI-complementary positions such as prompt engineers, AI trainers, and quality assurance specialists. High-skill analytical roles showed resilience, with employment levels remaining stable but job content evolving significantly.
+
+Heterogeneous effects emerge across industries. Creative industries experienced job polarization, with mid-level positions declining while both entry-level and senior strategic roles expanded. Technology firms showed overall employment growth of 12%, driven by new AI-related positions. Traditional industries demonstrated slower adjustment patterns with temporary employment disruptions followed by gradual recovery.
+
+We document important skill reallocation dynamics. Workers in displaced roles who received AI training showed 67% successful transition rates to complementary positions. Firms investing in reskilling programs experienced lower turnover and higher productivity gains. The paper identifies critical factors determining whether AI serves as substitute or complement to human labor.
+
+Policy implications include the need for proactive workforce development, social safety nets during transition periods, and educational system reforms to prepare workers for AI-augmented roles. Our findings suggest that while generative AI creates significant labor market disruption, thoughtful implementation can lead to net positive employment effects with appropriate support structures.`,
         url: "https://arxiv.org/abs/2024.5678",
         source: "arxiv",
         relevanceScore: 85,
         metadata: {
           published: "2024-02-20",
-          authors: ["Lee, A.", "Chen, M.", "Davis, R."]
+          authors: ["Lee, A.", "Chen, M.", "Davis, R.", "Thompson, K.", "Garcia, S."],
+          categories: ["econ.GN", "cs.CY", "stat.AP"],
+          arxivId: "2024.5678",
+          abstract: "This paper examines employment patterns in organizations that adopted generative AI tools early..."
         }
       }
     ];
@@ -695,19 +1004,54 @@ export class ArxivSearchService {
       const id = `arxiv-${term.slice(0, 8).replace(/\s+/g, '-')}-${i + 1}`;
       const arxivId = `2024.${String(Math.floor(Math.random() * 9000) + 1000)}`;
       
+      // Generate full abstract content
+      const fullAbstract = `${template.contentTemplate.replace(/\{term\}/g, termFormatted)}
+
+We present a comprehensive investigation into ${termFormatted} through rigorous empirical analysis and theoretical frameworks. This research addresses critical gaps in current understanding and provides novel insights with significant practical implications.
+
+Background and Motivation:
+The rapid evolution of ${termFormatted} has created both opportunities and challenges across multiple domains. Previous research has established foundational concepts but left important questions unanswered. Our work builds upon existing literature while introducing innovative methodologies to explore previously unexamined aspects.
+
+Methodology:
+Our approach combines multiple research methodologies:
+- Large-scale data collection from diverse sources (N = ${Math.floor(Math.random() * 5000) + 1000})
+- Advanced statistical modeling using state-of-the-art techniques
+- Qualitative analysis through expert interviews and case studies
+- Experimental validation in controlled environments
+- Cross-sectional and longitudinal analysis spanning ${Math.floor(Math.random() * 3) + 2} years
+
+Key Contributions:
+1. Novel theoretical framework for understanding ${termFormatted} dynamics
+2. Empirical evidence challenging conventional assumptions
+3. Practical guidelines for implementation in real-world settings
+4. Identification of critical success factors and failure modes
+5. Quantitative metrics for evaluating ${termFormatted} effectiveness
+
+Results and Findings:
+Our analysis reveals surprising patterns in ${termFormatted} adoption and impact. Contrary to prevailing theories, we find non-linear relationships between implementation intensity and outcomes. The data shows significant heterogeneity across contexts, with effect sizes ranging from 0.2 to 0.8 depending on moderating variables.
+
+Statistical significance was achieved for primary hypotheses (p < 0.001), with robust results across multiple model specifications. Sensitivity analyses confirm the stability of our findings under various assumptions.
+
+Implications:
+These findings have profound implications for both theory and practice. Theoretically, our results necessitate revision of existing models to account for observed complexity. Practically, organizations must adopt nuanced approaches to ${termFormatted} implementation, considering context-specific factors identified in our analysis.
+
+Future Directions:
+This research opens several avenues for future investigation, including exploration of boundary conditions, development of predictive models, and examination of long-term sustainability. We provide a research agenda to guide subsequent studies in this rapidly evolving field.`;
+
       mockResults.push({
         id,
         title: template.titleTemplate.replace(/\{term\}/g, termFormatted),
-        content: template.contentTemplate.replace(/\{term\}/g, termFormatted),
+        content: fullAbstract.trim(),
         url: `https://arxiv.org/abs/${arxivId}`,
         source: "arxiv",
         relevanceScore: Math.max(90 - (i * 2) - Math.floor(Math.random() * 8), 75),
         metadata: {
           published: `2024-${String(Math.floor(Math.random() * 12) + 1).padStart(2, '0')}-${String(Math.floor(Math.random() * 28) + 1).padStart(2, '0')}`,
           authors: [`Author ${String.fromCharCode(65 + Math.floor(Math.random() * 26))}.`, `Researcher ${String.fromCharCode(65 + Math.floor(Math.random() * 26))}.`],
-          category: template.category,
+          categories: [template.category],
           arxivId,
-          searchTerm: term
+          searchTerm: term,
+          abstract: template.contentTemplate.replace(/\{term\}/g, termFormatted)
         }
       });
     }
@@ -752,7 +1096,7 @@ export class RedditSearchService {
       }
       
       try {
-        console.log(`🔍 Reddit searching subreddit ${i + 1}/${subreddits.length}: r/${subreddit}`);
+        console.log(`🔍 Reddit searching subreddit ${i + 1}/${subreddits.length}: r/${truncateLog(subreddit)}"`);
         
         if (configService.isRealMode() && this.clientId && this.clientSecret) {
           const subredditResults = await this.realSearchSubreddit(subreddit, maxPostsPerSubreddit, maxCommentsPerPost);
@@ -861,20 +1205,25 @@ export class RedditSearchService {
                 if (commentsResponse.ok) {
                   const commentsData = await commentsResponse.json();
                   
-                  // Extract top relevant comments
+                  // Extract top 10 most relevant comments
                   if (Array.isArray(commentsData) && commentsData[1]?.data?.children) {
                     topComments = commentsData[1].data.children
-                      .slice(0, 5) // Top 5 comments
-                      .map((comment: any) => comment.data?.body)
-                      .filter((body: string) => body && body !== '[deleted]' && body !== '[removed]')
-                      .filter((body: string) => {
-                        // Filter comments that are relevant to the query
-                        const commentText = body.toLowerCase();
-                        const queryTerms = query.toLowerCase().split(' ');
-                        return queryTerms.some(term => commentText.includes(term)) || body.length > 50;
+                      .filter((comment: any) => {
+                        const body = comment.data?.body;
+                        return body && body !== '[deleted]' && body !== '[removed]' && body.length > 20;
                       })
-                      .slice(0, 3) // Keep top 3 relevant comments
-                      .map((body: string) => body.substring(0, 200)); // Truncate long comments
+                      .sort((a: any, b: any) => {
+                        // Sort by score (upvotes - downvotes) to get most relevant
+                        const scoreA = (a.data?.score || 0) + (a.data?.ups || 0);
+                        const scoreB = (b.data?.score || 0) + (b.data?.ups || 0);
+                        return scoreB - scoreA;
+                      })
+                      .slice(0, 10) // Keep exactly top 10 most relevant comments
+                      .map((comment: any) => {
+                        const body = comment.data?.body || '';
+                        const truncated = body.length > 200 ? body.substring(0, 200) + '...' : body;
+                        return truncated;
+                      });
                   }
                 }
 
@@ -1062,15 +1411,26 @@ export class RedditSearchService {
             if (commentsResponse.ok) {
               const commentsData = await commentsResponse.json();
               
-              // Extract top relevant comments
+              // Extract top 10 most relevant comments
               if (Array.isArray(commentsData) && commentsData[1]?.data?.children) {
                 topComments = commentsData[1].data.children
                   .slice(0, Math.min(maxCommentsPerPost, 100))
-                  .map((comment: any) => comment.data?.body)
-                  .filter((body: string) => body && body !== '[deleted]' && body !== '[removed]')
-                  .filter((body: string) => body.length > 20)
-                  .slice(0, 20) // Keep top 20 relevant comments
-                  .map((body: string) => body.substring(0, 150)); // Truncate long comments
+                  .filter((comment: any) => {
+                    const body = comment.data?.body;
+                    return body && body !== '[deleted]' && body !== '[removed]' && body.length > 20;
+                  })
+                  .sort((a: any, b: any) => {
+                    // Sort by score (upvotes - downvotes) to get most relevant
+                    const scoreA = (a.data?.score || 0) + (a.data?.ups || 0);
+                    const scoreB = (b.data?.score || 0) + (b.data?.ups || 0);
+                    return scoreB - scoreA;
+                  })
+                  .slice(0, 10) // Keep exactly top 10 most relevant comments
+                  .map((comment: any) => {
+                    const body = comment.data?.body || '';
+                    const truncated = body.length > 200 ? body.substring(0, 200) + '...' : body;
+                    return truncated;
+                  });
               }
             }
 
