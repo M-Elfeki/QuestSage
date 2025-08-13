@@ -7,7 +7,7 @@ interface QueryInputProps {
 }
 
 export default function QueryInput({ onQuerySubmit }: QueryInputProps) {
-  const [query, setQuery] = useState("What are the potential implications of widespread adoption of large language models on the future job market, particularly in knowledge work sectors?");
+  const [query, setQuery] = useState("");
 
   const handleSubmit = () => {
     if (query.trim()) {

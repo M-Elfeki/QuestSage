@@ -1,29 +1,49 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { storage } from "./storage";
-import { insertResearchSessionSchema, insertResearchFindingSchema, insertAgentDialogueSchema } from "@shared/schema";
+import { promises as fs } from "fs";
+import path from "path";
 import { FlashLLMService, ProLLMService } from "./services/llm";
 
 import { ChatGPTAgent, GeminiAgent } from "./services/agents";
-import { GoogleSearchService, ArxivSearchService, RedditSearchService, PerplexityService } from "./services/search";
+import { WebScrapingService, ArxivSearchService, RedditSearchService, PerplexityService } from "./services/search";
 import { configService } from "./services/config";
 import { devWorkflowService } from "./services/dev-workflow";
+import { tempStorage } from "./services/rate-limiter";
 
 const flashLLM = new FlashLLMService();
 const proLLM = new ProLLMService();
-const googleSearch = new GoogleSearchService();
+const webSearch = new WebScrapingService();
 const arxivSearch = new ArxivSearchService();
 const redditSearch = new RedditSearchService();
 const perplexityService = new PerplexityService();
 const chatgptAgent = new ChatGPTAgent();
 const geminiAgent = new GeminiAgent();
 
+// Simple in-memory storage for all data
+const sessions = new Map();
+const findings = new Map();
+const dialogues = new Map();
+
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Clean up old temporary files on startup
+  try {
+    await tempStorage.cleanupOldFiles();
+  } catch (error) {
+    console.warn("Warning: Could not clean up old temp files:", error);
+  }
+
   // Research Session routes
   app.post("/api/research-sessions", async (req, res) => {
     try {
-      const sessionData = insertResearchSessionSchema.parse(req.body);
-      const session = await storage.createResearchSession(sessionData);
+      const sessionData = req.body;
+      const sessionId = Math.random().toString(36).substr(2, 9) + Date.now().toString(36);
+      const session = {
+        id: sessionId,
+        ...sessionData,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+      sessions.set(sessionId, session);
       res.json(session);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -32,7 +52,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/research-sessions/:id", async (req, res) => {
     try {
-      const session = await storage.getResearchSession(req.params.id);
+      const session = sessions.get(req.params.id);
       if (!session) {
         return res.status(404).json({ message: "Research session not found" });
       }
@@ -44,8 +64,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/research-sessions/:id", async (req, res) => {
     try {
-      const session = await storage.updateResearchSession(req.params.id, req.body);
-      res.json(session);
+      const existing = sessions.get(req.params.id);
+      if (!existing) {
+        return res.status(404).json({ message: "Research session not found" });
+      }
+      const updated = { ...existing, ...req.body, updatedAt: new Date() };
+      sessions.set(req.params.id, updated);
+      res.json(updated);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
     }
@@ -76,12 +101,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { query } = req.body;
       
-      let clarification;
-      if (configService.isRealMode()) {
-        clarification = await flashLLM.clarifyIntent(query);
-      } else {
-        clarification = await devWorkflowService.clarifyIntent(query);
-      }
+      // Use the updated FlashLLMService for both modes (it handles mode switching internally)
+      const clarification = await flashLLM.clarifyIntent(query);
       
       res.json(clarification);
     } catch (error: any) {
@@ -96,23 +117,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       if (configService.isRealMode()) {
         // Production mode - use real APIs
-        const searchPlan = await flashLLM.generateSearchTerms(clarifiedIntent);
+        const searchTerms = await flashLLM.generateSearchTerms(clarifiedIntent);
+        const orchestration = await proLLM.orchestrateResearch(clarifiedIntent, searchTerms);
         
-        const [googleResults, arxivResults, redditResults] = await Promise.all([
-          googleSearch.search(searchPlan.surfaceTerms?.[0] || "LLM knowledge work impact", 5),
-          arxivSearch.search(searchPlan.surfaceTerms?.[0] || "large language models employment", 3),
-          redditSearch.search(searchPlan.socialTerms?.[0] || "AI job impact discussion", 3)
+        // Enhanced surface-level search with progress tracking
+        console.log("🔍 Starting expanded surface-level search...");
+        
+        // Create progress tracking for each search type
+        let totalSteps = (searchTerms.surfaceTerms?.length || 10) + (searchTerms.surfaceTerms?.length || 10) + (searchTerms.domainSpecificSources?.relevantSubreddits?.length || 10);
+        let completedSteps = 0;
+        
+        const updateProgress = (step: string, current: number, total: number, item: string) => {
+          completedSteps = current;
+          console.log(`📊 Progress: ${step} - ${current}/${total} (${item})`);
+        };
+
+        // Get configurable search parameters
+        const searchConfig = configService.getSearchConfig();
+        
+        // Run expanded searches in parallel with configurable parameters
+        const [webResults, arxivResults, redditResults] = await Promise.all([
+          webSearch.searchMultipleTerms(
+            searchTerms.surfaceTerms?.slice(0, searchConfig.searchTermsLimit) || ["LLM knowledge work impact", "AI workplace productivity", "generative AI employment"], 
+            searchConfig.webResultsPerTerm,
+            (current, total, term) => updateProgress("Web Search", current, total, term)
+          ),
+          arxivSearch.searchMultipleTerms(
+            searchTerms.surfaceTerms?.slice(0, searchConfig.searchTermsLimit) || ["large language models employment", "AI automation workplace", "generative AI productivity"], 
+            searchConfig.arxivResultsPerTerm,
+            (current, total, term) => updateProgress("arXiv Search", current, total, term)
+          ),
+          redditSearch.searchMultipleSubreddits(
+            searchTerms.domainSpecificSources?.relevantSubreddits?.slice(0, searchConfig.redditSubredditsLimit) || ["MachineLearning", "artificial", "ChatGPT", "OpenAI", "singularity", "cscareerquestions", "programming", "LegalAdvice", "consulting", "productivity"], 
+            searchConfig.redditPostsPerSubreddit,
+            searchConfig.redditCommentsPerPost,
+            (current, total, subreddit) => updateProgress("Reddit Search", current, total, `r/${subreddit}`)
+          )
         ]);
 
+        console.log(`✅ Expanded search completed: ${webResults.length} web, ${arxivResults.length} arXiv, ${redditResults.length} Reddit results`);
+
         const allResults = [
-          ...googleResults.map((r: any) => ({ ...r, sourceType: "surface" })),
+          ...webResults.map((r: any) => ({ ...r, sourceType: "surface" })),
           ...arxivResults.map((r: any) => ({ ...r, sourceType: "surface" })),
           ...redditResults.map((r: any) => ({ ...r, sourceType: "social" }))
         ];
 
-        const findings = [];
+        const findingsToSave = [];
         for (const result of allResults) {
-          const finding = await storage.createResearchFinding({
+          const finding = {
+            id: Math.random().toString(36).substr(2, 9) + Date.now().toString(36),
             sessionId,
             source: result.source,
             sourceType: result.sourceType,
@@ -124,87 +178,308 @@ export async function registerRoutes(app: Express): Promise<Server> {
             qualityScore: Math.floor(Math.random() * 30) + 70,
             isContradictory: Math.random() < 0.1,
             metadata: result.metadata
-          });
-          findings.push(finding);
+          };
+          findings.set(finding.id, finding);
+          findingsToSave.push(finding);
         }
 
-        const factExtraction = await flashLLM.extractFacts(allResults);
-        const analysis = await proLLM.analyzeResearchFindings(findings);
+        // Stage 2.2: Parallel Fact Extraction (Three separate Gemini calls) - prioritize recall over precision
+        console.log("🔄 Running three separate Gemini calls for fact extraction...");
         
-        res.json({
+        const [webFactExtraction, redditFactExtraction, arxivFactExtraction] = await Promise.all([
+          flashLLM.extractFactsFromWebResults(webResults, searchTerms.relevanceRubric),
+          flashLLM.extractFactsFromRedditResults(redditResults, searchTerms.relevanceRubric),
+          flashLLM.extractFactsFromArxivResults(arxivResults, searchTerms.relevanceRubric)
+        ]);
+
+        // Combine results from all three fact extractions
+        const factExtraction = {
+          claims: [
+            ...webFactExtraction.claims,
+            ...redditFactExtraction.claims,
+            ...arxivFactExtraction.claims
+          ],
+          totalClaims: webFactExtraction.totalClaims + redditFactExtraction.totalClaims + arxivFactExtraction.totalClaims,
+          processingNotes: `Combined extraction: Web (${webFactExtraction.totalClaims} claims), Reddit (${redditFactExtraction.totalClaims} claims), arXiv (${arxivFactExtraction.totalClaims} claims). ${webFactExtraction.processingNotes} | ${redditFactExtraction.processingNotes} | ${arxivFactExtraction.processingNotes}`
+        };
+        
+        console.log(`✅ Three separate Gemini calls completed: ${factExtraction.totalClaims} total claims extracted`);
+        
+        // Stage 2.3: Two-Step Analysis Process
+        // Step 1: Deterministic filtering based on relevance thresholds (DISABLED FOR NOW)
+        // const filteredClaims = factExtraction.claims.filter(claim => 
+        //   claim.relevanceScore >= searchTerms.evidenceThresholds.minimumRelevanceScore
+        // );
+        
+        // Use all claims without filtering for now
+        const filteredClaims = factExtraction.claims;
+        
+        // Convert filtered claims to findings format for Pro LLM analysis
+        const claimFindings = [];
+        for (const claim of filteredClaims) {
+          const finding = {
+            id: Math.random().toString(36).substr(2, 9) + Date.now().toString(36),
+            sessionId,
+            source: claim.source || 'extracted',
+            sourceType: 'surface',
+            title: claim.text.substring(0, 100),
+            url: null,
+            content: claim.text,
+            snippet: claim.text.substring(0, 200),
+            relevanceScore: claim.relevanceScore,
+            qualityScore: claim.qualityScore || 70,
+            isContradictory: claim.isContradictory || false,
+            metadata: claim.metadata || {}
+          };
+          findings.set(finding.id, finding);
+          claimFindings.push(finding);
+        }
+        
+        // Step 2: Pro LLM analysis of filtered claims only
+        const analysis = await proLLM.analyzeResearchFindings(
+          [...findingsToSave, ...claimFindings],
+          searchTerms.evidenceThresholds
+        );
+        
+        // Save all surface-level search data to temporary file BEFORE making LLM calls
+        const tempResearchData = {
           searchResults: {
-            google: { results: googleResults },
+            web: { results: webResults },
             arxiv: { results: arxivResults },
             reddit: { results: redditResults }
           },
           factExtraction,
           analysis,
-          findings
+          findings: findingsToSave,
+          orchestration
+        };
+        
+        const tempFilePath = await tempStorage.saveSurfaceSearchResults(sessionId, tempResearchData);
+        console.log(`💾 Surface research data saved to: ${tempFilePath}`);
+        
+        // Stage 2.4: Generate Surface Research Report BEFORE deep research
+        const surfaceResearchReport = await flashLLM.generateSurfaceResearchReport(
+          factExtraction, 
+          { 
+            web: webResults, 
+            arxiv: arxivResults, 
+            reddit: redditResults,
+            domainSources: searchTerms.domainSpecificSources 
+          },
+          clarifiedIntent
+        );
+        
+        res.json({
+          searchResults: {
+            web: { results: webResults },
+            arxiv: { results: arxivResults },
+            reddit: { results: redditResults }
+          },
+          factExtraction,
+          analysis,
+          findings: findingsToSave,
+          surfaceResearchReport,
+          orchestration,
+          tempFilePath
         });
       } else {
-        // Development mode - use dev workflow
-        const searchPlan = await devWorkflowService.generateSearchTerms(clarifiedIntent);
+        // Development mode - use dev workflow with real Gemini Flash 2.5 calls
+        console.log("🔍 DEV MODE: Starting expanded surface-level search with real LLM calls...");
         
-        // Create mock search results
-        const mockResults = [
-          {
-            source: "google",
-            sourceType: "surface",
-            title: "MIT Study: ChatGPT Boosts Productivity by 14% for Knowledge Workers",
-            url: "https://www.example.com/mit-study",
-            content: "A comprehensive study by MIT researchers found that knowledge workers using ChatGPT showed significant productivity improvements...",
-            snippet: "MIT researchers found that knowledge workers using ChatGPT showed significant productivity improvements",
-            metadata: { publishDate: "2024-01", citations: 127 }
-          },
-          {
-            source: "arxiv",
-            sourceType: "surface", 
-            title: "Economic Impact of Large Language Models on Labor Markets",
-            url: "https://arxiv.org/abs/2024.001",
-            content: "This paper analyzes the potential economic disruption caused by large language model adoption across knowledge work sectors...",
-            snippet: "This paper analyzes the potential economic disruption caused by large language model adoption",
-            metadata: { authors: ["Smith, J.", "Johnson, M."], category: "economics" }
-          },
-          {
-            source: "reddit",
-            sourceType: "social",
-            title: "Real-world ChatGPT productivity experiences from r/MachineLearning",
-            url: "https://reddit.com/r/MachineLearning/discussions",
-            content: "Community discussion reveals mixed experiences with ChatGPT integration in workplace settings...",
-            snippet: "Community discussion reveals mixed experiences with ChatGPT integration in workplace settings",
-            metadata: { upvotes: 342, comments: 89 }
-          }
+        const devSearchTerms = await devWorkflowService.generateSearchTerms(clarifiedIntent);
+        const orchestration = await proLLM.orchestrateResearch(clarifiedIntent, devSearchTerms);
+        
+        // Get configurable search parameters
+        const searchConfig = configService.getSearchConfig();
+        
+        // Create progress tracking for each search type
+        let totalSteps = searchConfig.searchTermsLimit * 3; // 3 search types
+        let completedSteps = 0;
+        
+        const updateProgress = (step: string, current: number, total: number, item: string) => {
+          completedSteps = current;
+          console.log(`📊 DEV Progress: ${step} - ${current}/${total} (${item})`);
+        };
+
+        // Run expanded searches with configurable parameters
+        const [webResults, arxivResults, redditResults] = await Promise.all([
+          webSearch.searchMultipleTerms(
+            devSearchTerms.surfaceTerms?.slice(0, searchConfig.searchTermsLimit) || ["LLM knowledge work impact", "AI workplace productivity", "generative AI employment", "ChatGPT productivity gains", "artificial intelligence job displacement", "knowledge work automation", "AI tools workplace efficiency", "machine learning productivity", "LLM adoption enterprise", "AI workplace transformation"], 
+            searchConfig.webResultsPerTerm,
+            (current, total, term) => updateProgress("Web Search", current, total, term)
+          ),
+          arxivSearch.searchMultipleTerms(
+            devSearchTerms.surfaceTerms?.slice(0, searchConfig.searchTermsLimit) || ["large language models employment", "AI automation workplace", "generative AI productivity", "LLM economic impact", "artificial intelligence labor market", "knowledge work AI transformation", "machine learning workplace studies", "AI productivity research", "generative AI adoption", "LLM workplace efficiency"], 
+            searchConfig.arxivResultsPerTerm,
+            (current, total, term) => updateProgress("arXiv Search", current, total, term)
+          ),
+          redditSearch.searchMultipleSubreddits(
+            devSearchTerms.relevantSubreddits?.slice(0, searchConfig.redditSubredditsLimit) || ["MachineLearning", "artificial", "ChatGPT", "OpenAI", "singularity", "cscareerquestions", "programming", "LegalAdvice", "consulting", "productivity"], 
+            searchConfig.redditPostsPerSubreddit,
+            searchConfig.redditCommentsPerPost,
+            (current, total, subreddit) => updateProgress("Reddit Search", current, total, `r/${subreddit}`)
+          )
+        ]);
+
+        console.log(`✅ DEV MODE: Expanded search completed: ${webResults.length} web, ${arxivResults.length} arXiv, ${redditResults.length} Reddit results`);
+
+        const allResults = [
+          ...webResults.map((r: any) => ({ ...r, sourceType: "surface" })),
+          ...arxivResults.map((r: any) => ({ ...r, sourceType: "surface" })),
+          ...redditResults.map((r: any) => ({ ...r, sourceType: "social" }))
         ];
 
         // In dev mode, we'll return mock data without storing to database
-        const findings = mockResults.map((result, index) => ({
-          id: `mock-finding-${index}`,
+        const findingsToSave = allResults.map((result, index) => ({
+          id: Math.random().toString(36).substr(2, 9) + Date.now().toString(36),
           sessionId,
           source: result.source,
           sourceType: result.sourceType,
           title: result.title,
           url: result.url,
           content: result.content,
-          snippet: result.snippet,
-          relevanceScore: Math.floor(Math.random() * 40) + 60,
+          snippet: result.snippet || result.content?.substring(0, 200),
+          relevanceScore: result.relevanceScore || Math.floor(Math.random() * 40) + 60,
           qualityScore: Math.floor(Math.random() * 30) + 70,
           isContradictory: Math.random() < 0.1,
           metadata: result.metadata,
           createdAt: new Date().toISOString()
         }));
 
-        const factExtraction = await devWorkflowService.extractFacts(mockResults);
-        const analysis = await devWorkflowService.analyzeResearchFindings(findings);
+        // Stage 2.2: Parallel Fact Extraction (Three separate Gemini calls) - prioritize recall over precision
+        console.log("🔄 Running three separate Gemini calls for fact extraction...");
+        const relevanceRubric = devSearchTerms.relevanceRubric || "Score 0-100: Empirical data (30pts), direct relevance to knowledge work (25pts), recency <2 years (20pts), source credibility (15pts), sample size/methodology (10pts)";
         
-        res.json({
+        const [webFactExtraction, redditFactExtraction, arxivFactExtraction] = await Promise.all([
+          flashLLM.extractFactsFromWebResults(webResults, relevanceRubric),
+          flashLLM.extractFactsFromRedditResults(redditResults, relevanceRubric),
+          flashLLM.extractFactsFromArxivResults(arxivResults, relevanceRubric)
+        ]);
+
+        // Combine results from all three fact extractions
+        const factExtraction = {
+          claims: [
+            ...webFactExtraction.claims,
+            ...redditFactExtraction.claims,
+            ...arxivFactExtraction.claims
+          ],
+          totalClaims: webFactExtraction.totalClaims + redditFactExtraction.totalClaims + arxivFactExtraction.totalClaims,
+          processingNotes: `Combined extraction: Web (${webFactExtraction.totalClaims} claims), Reddit (${redditFactExtraction.totalClaims} claims), arXiv (${arxivFactExtraction.totalClaims} claims). ${webFactExtraction.processingNotes} | ${redditFactExtraction.processingNotes} | ${arxivFactExtraction.processingNotes}`
+        };
+        
+        console.log(`✅ Three separate Gemini calls completed: ${factExtraction.totalClaims} total claims extracted`);
+        
+        // Stage 2.3: Two-Step Analysis Process
+        // Step 1: Deterministic filtering based on relevance thresholds
+        const filteredClaims = factExtraction.claims.filter(claim => 
+          claim.relevanceScore >= 65 // minimum relevance threshold
+        );
+        
+        // Step 2: Pro LLM analysis of filtered claims only (using dev workflow for now)
+        const analysis = await devWorkflowService.analyzeResearchFindings(
+          filteredClaims.map(claim => ({
+            ...claim,
+            sessionId,
+            source: claim.source || 'extracted',
+            sourceType: 'surface',
+            title: claim.text.substring(0, 100),
+            url: null,
+            content: claim.text,
+            snippet: claim.text.substring(0, 200),
+            relevanceScore: claim.relevanceScore,
+            qualityScore: claim.qualityScore || 70,
+            isContradictory: claim.isContradictory || false,
+            metadata: claim.metadata || {},
+            createdAt: new Date().toISOString()
+          }))
+        );
+        
+        // Save all surface-level search data to temporary file BEFORE making LLM calls (DEV MODE)
+        const tempResearchData = {
           searchResults: {
-            google: { results: mockResults.filter(r => r.source === 'google') },
-            arxiv: { results: mockResults.filter(r => r.source === 'arxiv') },
-            reddit: { results: mockResults.filter(r => r.source === 'reddit') }
+            web: { results: webResults },
+            arxiv: { results: arxivResults },
+            reddit: { results: redditResults }
           },
           factExtraction,
           analysis,
-          findings
+          findings: findingsToSave,
+          orchestration
+        };
+        
+        const tempFilePath = await tempStorage.saveSurfaceSearchResults(sessionId, tempResearchData);
+        console.log(`💾 DEV MODE: Surface research data saved to: ${tempFilePath}`);
+        
+        // Stage 2.4: Generate Surface Research Report BEFORE deep research
+        const surfaceResearchReport = await flashLLM.generateSurfaceResearchReport(
+          factExtraction, 
+          { 
+            web: webResults, 
+            arxiv: arxivResults, 
+            reddit: redditResults,
+            domainSources: {
+              relevantSubreddits: devSearchTerms.relevantSubreddits || ["r/MachineLearning", "r/cscareerquestions"],
+              expertTwitterAccounts: ["@AndrewYNg", "@GaryMarcus"],
+              specializedDatabases: ["NBER Working Papers", "IEEE Xplore"],
+              professionalForums: ["Hacker News", "Stack Overflow AI"],
+              industryResources: ["McKinsey Global Institute", "MIT Technology Review"]
+            }
+          },
+          clarifiedIntent
+        );
+
+        // Stage 2.5: Save complete surface search report to ./temp/surface-search.json
+        console.log(`🔄 Preparing complete surface search report for session: ${sessionId}`);
+        const completeSurfaceReport = {
+          metadata: {
+            sessionId,
+            timestamp: new Date().toISOString(),
+            query: clarifiedIntent?.query || "Research query",
+            phase: "surface-research-complete"
+          },
+          searchResults: {
+            web: { results: webResults, count: webResults.length },
+            arxiv: { results: arxivResults, count: arxivResults.length },
+            reddit: { results: redditResults, count: redditResults.length }
+          },
+          factExtraction: {
+            ...factExtraction,
+            totalClaimsExtracted: factExtraction.totalClaims,
+            claimsAfterFiltering: filteredClaims.length
+          },
+          analysis: {
+            ...analysis,
+            findingsCount: findingsToSave.length
+          },
+          surfaceResearchReport,
+          orchestration,
+          tempFilePath,
+          generatedAt: new Date().toISOString()
+        };
+
+        // Save to specific path: ./temp/surface-search.json
+        const surfaceReportPath = path.join(process.cwd(), 'temp', 'surface-search.json');
+        try {
+          await fs.mkdir(path.dirname(surfaceReportPath), { recursive: true });
+          await fs.writeFile(surfaceReportPath, JSON.stringify(completeSurfaceReport, null, 2), 'utf-8');
+          console.log(`📋 Complete surface search report saved to: ${surfaceReportPath}`);
+        } catch (error) {
+          console.error('Error saving surface search report:', error);
+        }
+        
+        res.json({
+          searchResults: {
+            web: { results: webResults },
+            arxiv: { results: arxivResults },
+            reddit: { results: redditResults }
+          },
+          factExtraction,
+          analysis,
+          findings: findingsToSave,
+          surfaceResearchReport,
+          orchestration,
+          tempFilePath,
+          surfaceReportPath: './temp/surface-search.json'
         });
       }
     } catch (error: any) {
@@ -217,12 +492,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { sessionId, analysis } = req.body;
       
+      // Verify that surface search report exists before proceeding
+      const surfaceReportPath = path.join(process.cwd(), 'temp', 'surface-search.json');
+      try {
+        await fs.access(surfaceReportPath);
+        console.log(`✅ Surface search report verified at: ${surfaceReportPath}`);
+      } catch (error) {
+        console.warn(`⚠️  Surface search report not found at: ${surfaceReportPath}`);
+        console.warn('Proceeding with deep research anyway...');
+      }
+      
       if (configService.isRealMode()) {
         const deepQuery = await flashLLM.generateDeepResearchQuery(analysis);
         const deepResults = await perplexityService.deepSearch(deepQuery);
+        const deepResearchReport = await flashLLM.generateDeepResearchReport(deepResults);
         
         for (const source of deepResults.sources) {
-          await storage.createResearchFinding({
+          const finding = {
+            id: Math.random().toString(36).substr(2, 9) + Date.now().toString(36),
             sessionId,
             source: "deepSonar",
             sourceType: "deep",
@@ -234,10 +521,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             qualityScore: 90,
             isContradictory: false,
             metadata: source.metadata
-          });
+          };
+          findings.set(finding.id, finding);
         }
         
-        res.json({ query: deepQuery, results: deepResults });
+        res.json({ query: deepQuery, results: deepResults, deepResearchReport });
       } else {
         const deepQuery = await devWorkflowService.generateDeepResearchQuery(analysis);
         
@@ -254,7 +542,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // In dev mode, create mock findings without database storage  
         const deepFindings = mockDeepResults.sources.map((source, index) => ({
-          id: `mock-deep-finding-${index}`,
+          id: Math.random().toString(36).substr(2, 9) + Date.now().toString(36),
           sessionId,
           source: "deepSonar",
           sourceType: "deep",
@@ -274,6 +562,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           results: { 
             ...mockDeepResults, 
             mockFindings: deepFindings 
+          },
+          deepResearchReport: {
+            report: "# Deep Research Report (Mock)\n\nConsolidated insights from simulated deep research.",
+            keyFindings: ["Policy gaps impact transition management"],
+            sourceAttribution: [
+              { claim: "Policy gap", sources: ["Deep: policy analysis"], strength: "high" }
+            ],
+            confidenceAssessment: "Medium"
           }
         });
       }
@@ -285,15 +581,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Agent selection
   app.post("/api/select-agents", async (req, res) => {
     try {
-      const { researchData, userContext } = req.body;
+      const { sessionId, researchData, userContext } = req.body;
       
+      // Always use Pro LLM for strategic agent selection as per specs
       let agentConfig;
       if (configService.isRealMode()) {
         agentConfig = await proLLM.selectAgents(researchData, userContext);
       } else {
-        agentConfig = await devWorkflowService.selectAgents(researchData, userContext);
+        // Use Pro LLM even in dev mode for agent selection (with mock data)
+        agentConfig = await proLLM.selectAgents(researchData, userContext);
       }
       
+      // Persist agent configuration for auditability
+      if (sessionId) {
+        const session = sessions.get(sessionId);
+        if (session) {
+          session.agentConfig = agentConfig;
+          sessions.set(sessionId, session);
+        }
+      }
+
       res.json(agentConfig);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -306,41 +613,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { sessionId, roundNumber, agentConfigs, context } = req.body;
       
       let chatgptResponse, geminiResponse;
+      const steering = context?.steering || {};
+      const basePrompt = "Analyze the research data and provide your perspective";
+      const steeringPrompt = steering?.questions?.length || steering?.feedback?.length
+        ? `\n\nIn this round, explicitly address the following:\n${
+            (steering.questions || []).map((q: string) => `- ${q}`).join('\n')
+          }${
+            (steering.feedback || []).length ? `\nIncorporate this feedback: ${steering.feedback.join('; ')}` : ''
+          }`
+        : "";
+      const fullPrompt = basePrompt + steeringPrompt;
       
       if (configService.isRealMode()) {
         [chatgptResponse, geminiResponse] = await Promise.all([
-          chatgptAgent.generateResponse(context.researchData, agentConfigs.chatgpt, context.previousDialogue || [], "Analyze the research data and provide your perspective"),
-          geminiAgent.generateResponse(context.researchData, agentConfigs.gemini, context.previousDialogue || [], "Analyze the research data and provide your perspective")
+          chatgptAgent.generateResponse(context.researchData, agentConfigs.chatgpt, context.dialogueHistory || [], fullPrompt),
+          geminiAgent.generateResponse(context.researchData, agentConfigs.gemini, context.dialogueHistory || [], fullPrompt)
         ]);
       } else {
         [chatgptResponse, geminiResponse] = await Promise.all([
-          devWorkflowService.generateAgentResponse("chatgpt", "Analyze the research data and provide your perspective", context, roundNumber),
-          devWorkflowService.generateAgentResponse("gemini", "Analyze the research data and provide your perspective", context, roundNumber)
+          devWorkflowService.generateAgentResponse("chatgpt", fullPrompt, context, roundNumber),
+          devWorkflowService.generateAgentResponse("gemini", fullPrompt, context, roundNumber)
         ]);
       }
 
-      // Store dialogue responses
-      const chatgptDialogue = await storage.createAgentDialogue({
+      // Store dialogue responses (ensuring proper data structure)
+      const chatgptDialogue = {
+        id: Math.random().toString(36).substr(2, 9) + Date.now().toString(36),
         sessionId,
         roundNumber,
         agentType: "chatgpt",
         agentConfig: agentConfigs.chatgpt,
         message: chatgptResponse.content,
         reasoning: chatgptResponse.reasoning,
-        confidenceScore: chatgptResponse.confidence,
-        sources: chatgptResponse.sources
-      });
+        confidenceScore: Math.round((chatgptResponse.confidence || 0.75) * 100),
+        sources: chatgptResponse.sources || []
+      };
+      dialogues.set(chatgptDialogue.id, chatgptDialogue);
 
-      const geminiDialogue = await storage.createAgentDialogue({
+      const geminiDialogue = {
+        id: Math.random().toString(36).substr(2, 9) + Date.now().toString(36),
         sessionId,
         roundNumber,
         agentType: "gemini", 
         agentConfig: agentConfigs.gemini,
         message: geminiResponse.content,
         reasoning: geminiResponse.reasoning,
-        confidenceScore: geminiResponse.confidence,
-        sources: geminiResponse.sources
-      });
+        confidenceScore: Math.round((geminiResponse.confidence || 0.72) * 100),
+        sources: geminiResponse.sources || []
+      };
+      dialogues.set(geminiDialogue.id, geminiDialogue);
 
       res.json({
         chatgpt: chatgptDialogue,
@@ -351,17 +672,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Alignment check - trigger before each continuation round
+  app.post("/api/check-alignment", async (req, res) => {
+    try {
+      const { conversationHistory, userIntent, currentRound } = req.body;
+      
+      // Always use Flash LLM for alignment checking as per specs
+      const alignmentCheck = await flashLLM.checkAlignment(conversationHistory, userIntent, currentRound);
+      
+      res.json(alignmentCheck);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Dialogue evaluation
   app.post("/api/evaluate-dialogue", async (req, res) => {
     try {
       const { context } = req.body;
       
-      let evaluation;
-      if (configService.isRealMode()) {
-        evaluation = await proLLM.evaluateDialogueRound(context);
-      } else {
-        evaluation = await devWorkflowService.evaluateDialogueRound(context);
-      }
+      // Always use Pro LLM for dialogue evaluation as per specs
+      const evaluation = await proLLM.evaluateDialogueRound(context);
       
       res.json(evaluation);
     } catch (error: any) {
@@ -372,13 +703,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Final synthesis
   app.post("/api/synthesize", async (req, res) => {
     try {
-      const { researchData, dialogueHistory } = req.body;
+      const { surfaceResearchReport, deepResearchReport, dialogueHistory, userContext } = req.body;
       
       let synthesis;
       if (configService.isRealMode()) {
-        synthesis = await proLLM.synthesizeResults(researchData, dialogueHistory);
+        synthesis = await proLLM.synthesizeResults(surfaceResearchReport, deepResearchReport, dialogueHistory, userContext);
       } else {
-        synthesis = await devWorkflowService.synthesizeResults(researchData, dialogueHistory);
+        synthesis = await proLLM.synthesizeResults(surfaceResearchReport, deepResearchReport, dialogueHistory, userContext);
       }
       
       res.json(synthesis);
@@ -390,8 +721,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get research findings
   app.get("/api/research-sessions/:id/findings", async (req, res) => {
     try {
-      const findings = await storage.getResearchFindings(req.params.id);
-      res.json(findings);
+      const sessionId = req.params.id;
+      const session = sessions.get(sessionId);
+      if (!session) {
+        return res.status(404).json({ message: "Research session not found" });
+      }
+      const sessionFindings = Array.from(findings.values()).filter(f => f.sessionId === sessionId);
+      res.json(sessionFindings);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -400,8 +736,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get agent dialogues
   app.get("/api/research-sessions/:id/dialogues", async (req, res) => {
     try {
-      const dialogues = await storage.getAgentDialogues(req.params.id);
-      res.json(dialogues);
+      const sessionId = req.params.id;
+      const session = sessions.get(sessionId);
+      if (!session) {
+        return res.status(404).json({ message: "Research session not found" });
+      }
+      const sessionDialogues = Array.from(dialogues.values()).filter(d => d.sessionId === sessionId);
+      res.json(sessionDialogues);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

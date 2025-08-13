@@ -1,150 +1,285 @@
-// Complete development workflow with realistic dummy data following the original specifications
+import { GoogleGenAI } from "@google/genai";
+import { geminiRateLimiter } from "./rate-limiter";
 
+// Development workflow that uses real Gemini Flash 2.5 calls but with expanded search capabilities
 export class DevWorkflowService {
+  private gemini?: GoogleGenAI;
+
+  constructor() {
+    if (process.env.GEMINI_API_KEY) {
+      this.gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    }
+  }
+
+  private async callGeminiFlash(prompt: string): Promise<any> {
+    if (!this.gemini) throw new Error("Gemini not configured for dev mode");
+    
+    return await geminiRateLimiter.executeWithQuotaHandling('gemini', async () => {
+      console.log(`🤖 DEV MODE: Calling Gemini Flash 2.5... (${geminiRateLimiter.getCurrentCallCount('gemini')}/7 calls in last minute)`);
+      const response = await this.gemini!.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt
+      });
+      console.log("✅ DEV MODE: Gemini Flash 2.5 responded successfully");
+      
+      const textResponse = response.text;
+      
+      if (!textResponse) {
+        throw new Error("No text response from Gemini");
+      }
+      
+      // Try to parse as JSON for structured responses
+      try {
+        let cleanResponse = textResponse.trim();
+        if (cleanResponse.startsWith('```json')) {
+          cleanResponse = cleanResponse.slice(7);
+        }
+        if (cleanResponse.endsWith('```')) {
+          cleanResponse = cleanResponse.slice(0, -3);
+        }
+        
+        const startIdx = cleanResponse.indexOf('{');
+        const endIdx = cleanResponse.lastIndexOf('}') + 1;
+        
+        if (startIdx !== -1 && endIdx !== 0) {
+          const jsonStr = cleanResponse.slice(startIdx, endIdx);
+          return JSON.parse(jsonStr);
+        } else {
+          return { raw_response: textResponse };
+        }
+      } catch (e) {
+        return { raw_response: textResponse };
+      }
+    });
+  }
   
   async clarifyIntent(query: string) {
-    // Simulate processing delay
-    await new Promise(resolve => setTimeout(resolve, 800));
-    
-    return {
-      clarifiedQuery: query,
-      scope: "Analysis of the impact and timeline of large language model adoption on knowledge work sectors",
-      requirements: [
-        "Analysis of LLM impact on knowledge work productivity",
-        "Timeline predictions for widespread adoption",
-        "Sector-specific vulnerability assessment", 
-        "Economic implications and workforce displacement risks",
-        "Policy recommendations for adaptation strategies"
-      ],
-      constraints: [
-        "Focus on peer-reviewed research and credible industry reports",
-        "Consider both optimistic and pessimistic scenarios",
-        "Exclude speculative or unsubstantiated claims"
-      ],
-      questions: [
-        {
-          id: "timeline_focus",
-          text: "Which timeline aspects are most important for your analysis?",
-          options: ["Short-term (1-3 years)", "Medium-term (3-7 years)", "Long-term (7+ years)", "All timeframes"]
-        },
-        {
-          id: "sector_priority", 
-          text: "Which knowledge work sectors should we prioritize?",
-          options: ["Legal services", "Consulting", "Content creation", "Software development", "All sectors"]
-        },
-        {
-          id: "analysis_depth",
-          text: "What level of analysis detail do you need?",
-          options: ["High-level overview", "Detailed analysis", "Strategic recommendations", "Academic depth"]
-        }
-      ],
-      researchDepth: "comprehensive",
-      expectedTimeframe: "2024-2030 analysis window"
-    };
+    // This method is deprecated - FlashLLMService should be used directly
+    // Keeping for backward compatibility but redirecting to proper service
+    throw new Error("Dev workflow clarifyIntent is deprecated - use FlashLLMService.clarifyIntent directly");
   }
 
   async generateSearchTerms(clarifiedIntent: any) {
-    await new Promise(resolve => setTimeout(resolve, 500));
+    const prompt = `You are a research planning expert. Generate comprehensive search terms for investigating: ${JSON.stringify(clarifiedIntent)}
+
+Generate AT LEAST 10 diverse search terms for each category to maximize research coverage:
+
+SURFACE TERMS (for Google/arXiv - academic and industry focus):
+- Focus on empirical studies, quantitative data, peer-reviewed research
+- Include productivity metrics, adoption statistics, economic impact
+- Cover different knowledge work sectors and timeframes
+
+SOCIAL TERMS (for Reddit - real-world experiences):
+- Focus on user experiences, implementation challenges, practical insights  
+- Include community discussions, professional forums
+- Cover both positive and negative experiences
+
+RELEVANT SUBREDDITS (identify 10 most relevant subreddits):
+- Consider communities focused on AI, workplace technology, career impact
+- Include sector-specific communities (legal, consulting, programming, etc.)
+- Prioritize active communities with quality discussions
+
+Respond in JSON format:
+{
+  "surfaceTerms": ["term1", "term2", ... at least 10 terms],
+  "socialTerms": ["term1", "term2", ... at least 10 terms], 
+  "relevantSubreddits": ["subreddit1", "subreddit2", ... exactly 10 subreddits],
+  "relevanceRubric": "detailed scoring criteria for filtering results",
+  "evidenceThresholds": {
+    "minimumRelevanceScore": 65,
+    "qualityThresholds": {
+      "high": 85,
+      "medium": 70,
+      "low": 55
+    }
+  }
+}`;
+
+    const result = await this.callGeminiFlash(prompt);
     
-    return {
-      surfaceTerms: [
+    // Ensure we have at least the minimum required terms
+    const response = {
+      surfaceTerms: result.surfaceTerms || [
         "large language models workplace productivity 2024",
-        "AI automation knowledge work employment impact",
-        "GPT ChatGPT workplace adoption timeline studies"
+        "AI automation knowledge work employment impact", 
+        "GPT ChatGPT workplace adoption timeline studies",
+        "LLM productivity gains empirical research",
+        "artificial intelligence job displacement statistics",
+        "generative AI knowledge worker efficiency",
+        "ChatGPT workplace integration case studies",
+        "AI tools productivity measurement research",
+        "LLM adoption enterprise transformation",
+        "knowledge work automation economic impact"
       ],
-      socialTerms: [
+      socialTerms: result.socialTerms || [
         "LLM workplace transformation experience",
         "AI job displacement knowledge workers",
-        "ChatGPT productivity gains real world"
+        "ChatGPT productivity gains real world",
+        "AI tools workplace implementation challenges",
+        "generative AI professional experience", 
+        "LLM integration work efficiency",
+        "AI productivity tools user reviews",
+        "ChatGPT workplace adoption stories",
+        "AI automation job impact discussion",
+        "knowledge work AI transformation"
       ],
-      deepTerms: [
-        "economic impact large language models labor market",
-        "artificial intelligence knowledge work automation timeline",
-        "LLM adoption enterprise productivity research"
-      ]
+      relevantSubreddits: result.relevantSubreddits || [
+        "MachineLearning", "artificial", "ChatGPT", "OpenAI", 
+        "singularity", "cscareerquestions", "programming", 
+        "LegalAdvice", "consulting", "productivity"
+      ],
+      relevanceRubric: result.relevanceRubric || "Score 0-100: Empirical data (30pts), direct relevance to knowledge work (25pts), recency <2 years (20pts), source credibility (15pts), sample size/methodology (10pts)",
+      evidenceThresholds: result.evidenceThresholds || {
+        minimumRelevanceScore: 65,
+        qualityThresholds: {
+          high: 85,
+          medium: 70,
+          low: 55
+        }
+      }
     };
+
+    return response;
   }
 
-  async extractFacts(searchResults: any[]) {
-    await new Promise(resolve => setTimeout(resolve, 600));
+  async extractFacts(searchResults: any[], relevanceRubric: string) {
+    const prompt = `You are a fact extraction expert. Extract unique claims from search results with rigorous scoring.
+
+RELEVANCE RUBRIC: ${relevanceRubric}
+
+INSTRUCTIONS:
+1. Extract ALL potentially relevant claims (prioritize recall over precision)
+2. Apply the rubric exactly as specified to score each claim
+3. Identify evidence type (empirical data, theoretical framework, anecdotal experience, opinion)
+4. Flag contradictory claims between sources
+5. Include source attribution for every claim
+6. Do NOT disregard any potentially relevant claim at this stage
+
+Search Results: ${JSON.stringify(searchResults.slice(0, 20))}
+
+Respond in JSON format:
+{
+  "claims": [
+    {
+      "id": "claim-1",
+      "text": "specific factual claim with context",
+      "source": "exact source name/URL",
+      "relevanceScore": 85,
+      "qualityScore": 90,
+      "isContradictory": false,
+      "evidenceType": "empirical",
+      "metadata": {
+        "methodology": "description if available",
+        "sampleSize": "if applicable",
+        "datePublished": "if available",
+        "conflictsWith": ["claim-id if contradictory"]
+      }
+    }
+  ],
+  "totalClaims": 12,
+  "processingNotes": "Summary of extraction process and any notable patterns"
+}`;
+
+    const result = await this.callGeminiFlash(prompt);
     
+    // Ensure we have a proper response structure
     return {
-      keyFacts: [
-        {
-          fact: "MIT study shows 14% productivity increase for knowledge workers using ChatGPT",
-          source: "MIT Research",
-          confidence: 0.92,
-          category: "productivity_evidence"
-        },
-        {
-          fact: "Goldman Sachs estimates 300M jobs globally could be affected by AI automation",
-          source: "Goldman Sachs Research",
-          confidence: 0.88,
-          category: "employment_impact"
-        },
-        {
-          fact: "Microsoft reports 70% of Copilot users say it makes them more productive",
-          source: "Microsoft Work Trend Index",
-          confidence: 0.85,
-          category: "user_experience"
-        },
-        {
-          fact: "Legal and consulting sectors show highest early adoption rates (35-40%)",
-          source: "Industry Surveys",
-          confidence: 0.79,
-          category: "sector_adoption"
-        }
-      ],
-      contradictions: [
-        {
-          claim1: "AI will eliminate most knowledge work jobs within 5 years",
-          claim2: "AI will primarily augment rather than replace knowledge workers",
-          sources: ["Tech predictions", "Academic research"],
-          analysis: "Significant disagreement on timeline and extent of displacement"
-        }
-      ],
-      gaps: [
-        "Limited long-term longitudinal studies",
-        "Insufficient data on productivity quality vs quantity",
-        "Unclear measurement standards across industries"
-      ]
+      claims: result.claims || [],
+      totalClaims: result.totalClaims || 0,
+      processingNotes: result.processingNotes || "Facts extracted using Gemini Flash 2.5"
     };
   }
 
   async analyzeResearchFindings(findings: any[]) {
-    await new Promise(resolve => setTimeout(resolve, 900));
+    const prompt = `You are a research analysis expert. Analyze the research findings following these specifications:
+
+RESEARCH FINDINGS: ${JSON.stringify(findings)}
+
+ANALYSIS REQUIREMENTS:
+1. Generate deduplicated comprehensive list of claims
+2. Flag contradictory claims between sources with specific reasoning
+3. Identify high-impact claims needing corroboration
+4. Highlight edge cases and boundary conditions requiring testing
+5. Map knowledge gaps with respect to user's question
+6. Provide detailed analysis report
+
+CRITICAL INSTRUCTIONS:
+- Every flagged contradiction must include specific reasoning
+- Edge cases should focus on boundary conditions and outlier scenarios
+- Knowledge gaps should be specific and actionable
+- High-impact claims are those that significantly affect conclusions
+
+Respond in JSON format:
+{
+  "filteredClaims": [{"findings": "after deterministic filtering"}],
+  "deduplicated": [{"unique claims": "after deduplication"}],
+  "contradictions": [
+    {
+      "claimIds": ["id1", "id2"],
+      "contradiction": "specific description",
+      "reasoning": "why these claims conflict",
+      "evidenceStrength": "assessment of evidence quality for each side"
+    }
+  ],
+  "highImpactClaims": [{"claims": "that significantly affect conclusions"}],
+  "edgeCases": [
+    {
+      "scenario": "edge case description",
+      "implications": "potential impact on conclusions",
+      "testingNeeded": "what additional research would clarify this"
+    }
+  ],
+  "knowledgeGaps": [
+    "specific gap description that affects answer quality"
+  ],
+  "analysisReport": "comprehensive analysis summary with key insights"
+}`;
+
+    const result = await this.callGeminiFlash(prompt);
     
+    // Ensure we have a proper response structure
     return {
-      overallQuality: 0.82,
-      sourceDistribution: {
-        academic: 0.35,
-        industry: 0.45,
-        government: 0.10,
-        media: 0.10
-      },
-      evidenceStrength: {
-        strong: 12,
-        moderate: 8,
-        weak: 4
-      },
-      keyThemes: [
-        "Productivity gains in routine cognitive tasks",
-        "Concerns about job displacement timeline",
-        "Need for reskilling and adaptation policies",
-        "Variation in impact across sectors and roles"
-      ],
-      recommendations: [
-        "Prioritize longitudinal studies on productivity quality",
-        "Investigate deep research on policy implications",
-        "Analyze sector-specific transformation patterns"
-      ]
+      filteredClaims: result.filteredClaims || findings,
+      deduplicated: result.deduplicated || findings,
+      contradictions: result.contradictions || [],
+      highImpactClaims: result.highImpactClaims || [],
+      edgeCases: result.edgeCases || [],
+      knowledgeGaps: result.knowledgeGaps || [],
+      analysisReport: result.analysisReport || "Analysis completed using Gemini Flash 2.5"
     };
   }
 
   async generateDeepResearchQuery(analysis: any) {
-    await new Promise(resolve => setTimeout(resolve, 400));
+    const prompt = `You are a deep research expert. Based on the analysis provided, generate a focused research query for additional investigation.
+
+Analysis: ${JSON.stringify(analysis)}
+
+Generate a targeted query that addresses:
+1. High-impact claims that need corroboration
+2. Contradictions that need resolution
+3. Edge cases that need validation
+4. Knowledge gaps that need filling
+
+The query should:
+- Be specific and actionable
+- Target appropriate expert sources
+- Focus on empirical evidence
+- Address critical uncertainties
+
+SYSTEMATIC APPROACH:
+1. CORROBORATION NEEDS: Which high-impact claims require additional validation?
+2. CONTRADICTORY FINDINGS RESOLUTION: What conflicts between sources need clarification?
+3. EDGE CASE TESTING: What boundary conditions and outlier scenarios need investigation?
+4. KNOWLEDGE GAP FILLING: What critical unknowns affect conclusion confidence?
+
+Generate ONE focused deep research question that strategically addresses these areas.
+
+Return only the research query text, no formatting or additional commentary.`;
+
+    const result = await this.callGeminiFlash(prompt);
     
-    return "What are the specific timeline predictions and policy recommendations for managing large language model adoption in knowledge work sectors, based on peer-reviewed economic research and empirical productivity studies?";
+    // Extract the query from the response
+    return result.raw_response || result.query || "Generated comprehensive deep research query addressing corroboration needs, contradictions, edge cases, and knowledge gaps.";
   }
 
   async selectAgents(researchData: any, userContext: any) {
@@ -180,90 +315,137 @@ export class DevWorkflowService {
   }
 
   async generateAgentResponse(agent: string, prompt: string, context: any, round: number) {
-    await new Promise(resolve => setTimeout(resolve, 1200));
+    let systemPrompt = "";
     
     if (agent === "chatgpt") {
-      return {
-        content: this.getChatGPTResponse(round, context),
-        reasoning: "Analyzed empirical data patterns to identify consistent productivity trends and timeline indicators",
-        confidence: 0.78,
-        sources: ["MIT productivity study", "Microsoft Copilot usage data", "Industry adoption surveys"],
-        keyPoints: [
-          "Productivity gains are measurable but vary significantly by task type",
-          "Current evidence suggests gradual adoption over 3-7 years",
-          "Quality control remains a significant implementation challenge"
-        ]
-      };
+      // ChatGPT Agent: INDUCTIVE PATTERN ANALYSIS
+      systemPrompt = `You are the ChatGPT Agent specialized in INDUCTIVE PATTERN ANALYSIS. Your role is to find concrete patterns in empirical data and build upward to general insights.
+
+CORE IDENTITY & APPROACH:
+- **Reasoning Style**: INDUCTIVE - Start with specific data points, identify patterns, build to generalizations
+- **Evidence Priority**: EMPIRICAL DATA MAXIMIZER - Prioritize quantitative studies, controlled experiments, real-world implementation data
+- **Temporal Focus**: SHORT-TERM DYNAMICS - Focus on current trends, immediate patterns, near-term implications (1-3 years)
+- **Risk Assessment**: BASE-RATE ANCHORED - Weight heavily toward historical precedents and established base rates
+- **Cognitive Bias**: Favor proven patterns over theoretical predictions
+
+DISTINCTIVE ANALYTICAL FRAMEWORK:
+1. **Data-First Analysis**: Always start with concrete numbers, studies, and observable trends
+2. **Pattern Recognition**: Look for recurring themes across multiple data sources
+3. **Statistical Validation**: Emphasize sample sizes, confidence intervals, and methodological rigor
+4. **Implementation Focus**: Prioritize real-world adoption data over theoretical projections
+5. **Conservative Extrapolation**: Extend patterns cautiously, acknowledging uncertainty
+
+RESPONSE STRUCTURE (500-1000 words):
+1. **Empirical Foundation**: Lead with strongest quantitative evidence
+2. **Pattern Identification**: Highlight consistent trends across data sources
+3. **Implementation Analysis**: Focus on real-world adoption and deployment challenges
+4. **Short-term Projection**: Conservative estimates based on current trajectory
+5. **Uncertainty Acknowledgment**: Clear about limitations and missing data
+
+SOURCE ATTRIBUTION REQUIREMENTS:
+- Every claim must cite: [Surface: Study Name] or [Deep: Source] or [SPECULATION]
+- Emphasize peer-reviewed studies and controlled experiments
+- Flag when extrapolating beyond available data
+
+DIALOGUE BEHAVIOR:
+- Challenge theoretical claims with empirical counter-evidence
+- Build on partner's frameworks using concrete data
+- Maintain skepticism toward unsupported projections
+- Focus on "what we know now" vs "what we think might happen"
+
+Research Context: ${JSON.stringify(context.researchData)}
+Previous Dialogue: ${JSON.stringify(context.dialogueHistory)}
+
+User Prompt: ${prompt}
+
+Remember: You are the empirical evidence specialist. Ground everything in observable data and proven patterns.`;
     } else {
-      return {
-        content: this.getGeminiResponse(round, context),
-        reasoning: "Applied economic transformation frameworks to model likely adoption scenarios and policy responses",
-        confidence: 0.82,
-        sources: ["Economic transition theory", "Technology adoption curves", "Labor market research"],
-        keyPoints: [
-          "Economic pressures will accelerate adoption beyond comfort zones",
-          "Policy interventions need to begin immediately for effective transition",
-          "Sector consolidation may occur around LLM-native organizations"
-        ]
-      };
+      // Gemini Agent: DEDUCTIVE FRAMEWORK ANALYSIS  
+      systemPrompt = `You are the Gemini Agent specialized in DEDUCTIVE FRAMEWORK ANALYSIS. Your role is to start with theoretical principles and logical frameworks, then systematically examine their implications.
+
+CORE IDENTITY & APPROACH:
+- **Reasoning Style**: DEDUCTIVE - Start with theoretical frameworks, test implications against evidence
+- **Evidence Priority**: THEORETICAL CHALLENGER - Question conventional assumptions, stress-test theoretical models
+- **Temporal Focus**: LONG-TERM STRUCTURAL - Analyze systemic implications and structural transformation (5-10+ years)
+- **Risk Assessment**: TAIL-RISK EXPLORER - Consider low-probability, high-impact scenarios and second-order effects
+- **Cognitive Bias**: Challenge consensus views, explore contrarian possibilities
+
+DISTINCTIVE ANALYTICAL FRAMEWORK:
+1. **Framework-First Analysis**: Begin with economic, social, or technological theory
+2. **Assumption Challenging**: Systematically question prevailing assumptions
+3. **Systems Thinking**: Analyze interconnections and emergent behaviors
+4. **Scenario Planning**: Consider multiple futures, especially edge cases
+5. **Strategic Implications**: Focus on policy and preparation needs
+
+RESPONSE STRUCTURE (500-1000 words):
+1. **Theoretical Foundation**: Establish relevant frameworks and principles
+2. **Systematic Analysis**: Apply logical reasoning to test implications
+3. **Structural Assessment**: Examine systemic and long-term consequences
+4. **Risk Exploration**: Consider tail risks and acceleration scenarios
+5. **Strategic Recommendations**: Policy and preparation implications
+
+SOURCE ATTRIBUTION REQUIREMENTS:
+- Every claim must cite: [Surface: Source Name] or [Deep: Source] or [SPECULATION]
+- Use theoretical frameworks from economic, social, and technological domains
+- Clearly distinguish between logical implications and empirical claims
+
+DIALOGUE BEHAVIOR:
+- Challenge partner's empirical conclusions with structural analysis
+- Explore "what if" scenarios that challenge conventional wisdom
+- Focus on systemic vulnerabilities and acceleration factors
+- Push beyond current data to consider structural implications
+
+Research Context: ${JSON.stringify(context.researchData)}
+Previous Dialogue: ${JSON.stringify(context.dialogueHistory)}
+
+User Prompt: ${prompt}
+
+Remember: You are the theoretical framework specialist. Challenge assumptions and explore structural implications that others might miss.`;
     }
-  }
 
-  private getChatGPTResponse(round: number, context: any): string {
-    const responses = [
-      // Round 1
-      `Looking at the empirical evidence, I see a consistent pattern of 15-30% productivity gains in routine cognitive tasks, but this comes with important caveats. The MIT study showing 14% improvement is robust, but it focused on specific writing and analysis tasks. 
-
-The Microsoft data is encouraging but potentially biased toward early adopters. What concerns me is the quality dimension - are we measuring speed or actual value creation? The productivity gains seem strongest for junior-level tasks, which suggests augmentation rather than replacement.
-
-Based on current adoption curves, I estimate 3-7 years for mainstream knowledge work integration, but this assumes organizations solve the quality control and hallucination problems.`,
-
-      // Round 2  
-      `I appreciate Gemini's strategic perspective, but I think the economic pressure argument needs more empirical grounding. Yes, competitive dynamics will drive adoption, but we have real-world constraints.
-
-Looking at the actual implementation data: most organizations are still in pilot phases after 18 months. Integration challenges include workflow redesign, training costs, and regulatory compliance. The legal sector shows high interest but slow deployment due to liability concerns.
-
-I maintain that gradual adoption is more likely because organizations need time to develop governance frameworks. The productivity benefits are real, but they require careful implementation to be sustainable.`,
-
-      // Round 3
-      `The dialogue reveals a crucial tension: the evidence supports both significant opportunity and substantial implementation complexity. 
-
-My synthesis: We're likely to see a two-phase adoption pattern. Phase 1 (current): Early adopters achieve measurable gains in specific use cases. Phase 2 (2026-2028): Mainstream adoption once integration challenges are solved.
-
-The key policy implication is timing - we need reskilling programs now, even if mass displacement is 5+ years away. The productivity gains are real enough to justify investment, but gradual enough to allow adaptation.`
-    ];
+    const result = await this.callGeminiFlash(systemPrompt);
+    const content = result.raw_response || result.content || "";
     
-    return responses[round - 1] || responses[2];
-  }
-
-  private getGeminiResponse(round: number, context: any): string {
-    const responses = [
-      // Round 1
-      `From a strategic analysis perspective, I believe we're underestimating the acceleration factors. Economic theory suggests that once productivity advantages become clear, competitive pressures create rapid adoption cycles.
-
-Consider the framework: LLMs reduce the marginal cost of cognitive work toward zero for many tasks. This isn't just productivity improvement - it's economic disruption. Organizations that don't adopt will face competitive disadvantage within 2-3 years, not 5-7.
-
-The policy challenge is more urgent than the empirical data suggests. We need proactive workforce transition strategies because market forces will drive faster adoption than individual organizations might prefer. The "gradual adoption" scenario assumes rational, coordinated behavior that economic incentives may not support.`,
-
-      // Round 2
-      `ChatGPT raises valid implementation points, but I think this reflects the current early adopter phase rather than future constraints. Economic transitions often appear gradual until they reach tipping points.
-
-Consider the strategic implications: Organizations investing heavily in LLM integration will gain sustainable competitive advantages. This creates pressure for rapid follower adoption. The "pilot phase" observation is correct for now, but enterprise software adoption curves typically show exponential acceleration after initial success cases.
-
-My concern is that waiting for "governance frameworks" may be a luxury most organizations can't afford. Market pressures may force adoption faster than careful implementation allows.`,
-
-      // Round 3
-      `The evidence points to a fundamental tension between optimal implementation timelines and competitive necessities. ChatGPT's empirical analysis is sound, but economic forces may not allow for ideal adoption pacing.
-
-My strategic assessment: We'll see forced acceleration around 2025-2026 as competitive advantages become undeniable. Organizations will choose imperfect implementation over competitive disadvantage.
-
-This suggests policy interventions need to assume faster timelines than current evidence suggests. We should prepare for scenario where economic pressures drive 3-5 year transformation rather than the 7-10 year gradual adoption that would be societally optimal.
-
-The synthesis point: Plan for gradual adoption, prepare for rapid acceleration.`
-    ];
+    // Parse response for source attributions and speculation flags
+    const sourceAttributions = this.extractSourceAttributions(content);
+    const speculationFlags = this.extractSpeculationFlags(content);
     
-    return responses[round - 1] || responses[2];
+    return {
+      content,
+      reasoning: agent === "chatgpt" ? 
+        "Inductive pattern analysis from empirical data with conservative extrapolation" :
+        "Deductive framework analysis with structural risk assessment and assumption challenging",
+      confidence: agent === "chatgpt" ? 0.78 : 0.74,
+      sources: [
+        {
+          claim: agent === "chatgpt" ? "Empirical pattern analysis based on research data" : "Theoretical framework analysis and structural implications",
+          source: `${agent} Agent - ${agent === "chatgpt" ? "Inductive" : "Deductive"} Analysis`,
+          type: "surface_finding" as const,
+          strength: "medium" as const
+        }
+      ],
+      sourceAttributions,
+      speculationFlags,
+      metadata: {
+        model: "gemini-2.5-flash",
+        approach: agent === "chatgpt" ? "inductive-empirical-maximizer" : "deductive-theoretical-challenger",
+        devMode: true,
+        agentPersonality: agent === "chatgpt" ? "data-driven-conservative" : "framework-driven-contrarian"
+      }
+    };
   }
+
+  private extractSourceAttributions(content: string): string[] {
+    const citations = content.match(/\[(?:Surface|Deep|Research):[^\]]+\]/g) || [];
+    return citations;
+  }
+
+  private extractSpeculationFlags(content: string): string[] {
+    const speculations = content.match(/\[SPECULATION[^\]]*\]/g) || [];
+    return speculations;
+  }
+
+
 
   async evaluateDialogueRound(context: any) {
     await new Promise(resolve => setTimeout(resolve, 500));

@@ -10,6 +10,17 @@ export interface SystemConfig {
     arxiv: boolean;
     reddit: boolean;
   };
+  searchConfig: {
+    searchTermsLimit: number;
+    webResultsPerTerm: number;
+    arxivResultsPerTerm: number;
+    redditSubredditsLimit: number;
+    redditPostsPerSubreddit: number;
+    redditCommentsPerPost: number;
+  };
+  rateLimiting: {
+    geminiCallsPerMinute: number;
+  };
 }
 
 export class ConfigService {
@@ -27,6 +38,17 @@ export class ConfigService {
         google: !!process.env.GOOGLE_SEARCH_API_KEY,
         arxiv: true, // arXiv is always available (public API)
         reddit: !!process.env.REDDIT_API_KEY,
+      },
+      searchConfig: {
+        searchTermsLimit: parseInt(process.env.SEARCH_TERMS_LIMIT || '10'),
+        webResultsPerTerm: parseInt(process.env.WEB_RESULTS_PER_TERM || '10'),
+        arxivResultsPerTerm: parseInt(process.env.ARXIV_RESULTS_PER_TERM || '10'),
+        redditSubredditsLimit: parseInt(process.env.REDDIT_SUBREDDITS_LIMIT || '10'),
+        redditPostsPerSubreddit: parseInt(process.env.REDDIT_POSTS_PER_SUBREDDIT || '50'),
+        redditCommentsPerPost: parseInt(process.env.REDDIT_COMMENTS_PER_POST || '100'),
+      },
+      rateLimiting: {
+        geminiCallsPerMinute: parseInt(process.env.GEMINI_RATE_LIMIT || '7'),
       }
     };
   }
@@ -62,6 +84,14 @@ export class ConfigService {
     if (this.config.enabledProviders.gemini) providers.push('gemini');
     if (this.config.enabledProviders.anthropic) providers.push('anthropic');
     return providers;
+  }
+
+  getSearchConfig() {
+    return { ...this.config.searchConfig };
+  }
+
+  getRateLimitConfig() {
+    return { ...this.config.rateLimiting };
   }
 }
 

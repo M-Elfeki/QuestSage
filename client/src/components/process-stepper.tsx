@@ -50,11 +50,6 @@ export default function ProcessStepper({ currentStage, onStageChange }: ProcessS
           </div>
         ))}
       </div>
-      
-      <div className="flex items-center space-x-2 text-sm text-gray-600">
-        <i className="fas fa-clock"></i>
-        <span data-testid="text-estimated-time">Estimated: 30-45 min</span>
-      </div>
     </div>
   );
 }

@@ -1,14 +1,52 @@
 interface SourceMetricsProps {
+  researchData?: any;
   className?: string;
 }
 
-const mockMetrics = [
-  { type: "Peer-Reviewed", percentage: 67, count: 156, color: "green" },
-  { type: "Primary Sources", percentage: 23, count: 54, color: "blue" },
-  { type: "Recent (2023-2024)", percentage: 78, count: 183, color: "purple" }
-];
+const generateDynamicMetrics = (researchData?: any) => {
+  if (!researchData) {
+    return [
+      { type: "Peer-Reviewed", percentage: 0, count: 0, color: "green" },
+      { type: "Primary Sources", percentage: 0, count: 0, color: "blue" },
+      { type: "Recent (2023-2024)", percentage: 0, count: 0, color: "purple" }
+    ];
+  }
 
-export default function SourceMetrics({ className }: SourceMetricsProps) {
+  const webResults = researchData.searchResults?.web?.results || [];
+  const arxivResults = researchData.searchResults?.arxiv?.results || [];
+  const redditResults = researchData.searchResults?.reddit?.results || [];
+  
+  const totalSources = webResults.length + arxivResults.length + redditResults.length;
+  
+  if (totalSources === 0) {
+    return [
+      { type: "Peer-Reviewed", percentage: 0, count: 0, color: "green" },
+      { type: "Primary Sources", percentage: 0, count: 0, color: "blue" },
+      { type: "Recent (2023-2024)", percentage: 0, count: 0, color: "purple" }
+    ];
+  }
+
+  // arXiv papers are considered peer-reviewed academic sources
+  const peerReviewedCount = arxivResults.length;
+  const peerReviewedPercentage = Math.round((peerReviewedCount / totalSources) * 100);
+
+  // Web and arXiv sources are considered primary sources
+  const primarySourcesCount = webResults.length + arxivResults.length;
+  const primarySourcesPercentage = Math.round((primarySourcesCount / totalSources) * 100);
+
+  // Estimate recent sources (assuming most collected data is recent)
+  const recentCount = totalSources; // Most web results are recent
+  const recentPercentage = Math.round((recentCount / totalSources) * 100);
+
+  return [
+    { type: "Academic Sources", percentage: peerReviewedPercentage, count: peerReviewedCount, color: "green" },
+    { type: "Primary Sources", percentage: primarySourcesPercentage, count: primarySourcesCount, color: "blue" },
+    { type: "Total Sources", percentage: 100, count: totalSources, color: "purple" }
+  ];
+};
+
+export default function SourceMetrics({ researchData, className }: SourceMetricsProps) {
+  const dynamicMetrics = generateDynamicMetrics(researchData);
   return (
     <div className={`bg-surface rounded-xl shadow-sm border border-gray-200 p-6 ${className || ''}`}>
       <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
@@ -16,7 +54,7 @@ export default function SourceMetrics({ className }: SourceMetricsProps) {
         Source Quality
       </h3>
       <div className="space-y-3">
-        {mockMetrics.map((metric, index) => (
+        {dynamicMetrics.map((metric, index) => (
           <div key={metric.type} className="flex justify-between items-center">
             <span className="text-sm text-gray-600" data-testid={`metric-label-${index}`}>{metric.type}</span>
             <div className="text-right">

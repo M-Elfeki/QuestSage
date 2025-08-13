@@ -5,7 +5,7 @@ import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Settings, Key, Database, Zap } from 'lucide-react';
+import { Settings, Key, Zap } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 interface SystemConfig {
@@ -154,17 +154,17 @@ export function SettingsDialog() {
             </p>
           </div>
 
-          {/* Database Status */}
+          {/* Storage Status */}
           <div className="space-y-3">
             <div className="flex items-center gap-3">
-              <Database className="h-5 w-5" />
-              <Label className="text-base font-medium">Database Storage</Label>
-              <Badge variant="default" data-testid="badge-database">
-                PostgreSQL Connected
+              <Zap className="h-5 w-5" />
+              <Label className="text-base font-medium">Data Storage</Label>
+              <Badge variant="default" data-testid="badge-storage">
+                In-Memory
               </Badge>
             </div>
             <p className="text-sm text-muted-foreground">
-              Research sessions and dialogue history are automatically saved to persistent storage.
+              Research sessions and dialogue history are stored in memory during the session. Data is cleared when the server restarts.
             </p>
           </div>
         </div>
