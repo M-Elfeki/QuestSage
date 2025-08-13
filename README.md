@@ -20,11 +20,11 @@ The system follows a **two-tier LLM architecture**:
 
 ### Core Components
 
-- **Frontend**: React-based UI with real-time research progress tracking
-- **Backend**: Express.js server with modular service architecture
-- **Database**: PostgreSQL with Drizzle ORM (configurable for Neon or local)
-- **AI Services**: OpenAI, Google Gemini, Anthropic Claude integration
+- **Frontend**: React-based UI with real-time research progress tracking and modern Tailwind CSS design
+- **Backend**: Express.js server with modular service architecture and in-memory storage
+- **AI Services**: OpenAI, Google Gemini, Anthropic Claude integration with rate limiting
 - **Search Services**: Google Search, arXiv, Reddit, Perplexity Deep Search
+- **Testing**: Comprehensive Vitest test suite with mock API responses
 
 ## 🔄 Development vs Production Modes
 
@@ -46,121 +46,64 @@ The system follows a **two-tier LLM architecture**:
   - Production-grade research capabilities
 - **Use Cases**: Real research projects, client work, production deployments
 
-## 🚀 How to Switch Between Modes
-
-### Method 1: UI Toggle (Recommended)
-1. Start the application
-2. Look for the **Dev Mode** toggle switch in the top-right corner
-3. Click to switch between Dev (checked) and Prod (unchecked) modes
-4. The system will automatically update the backend configuration
-
-### Method 2: Environment Variable
-Set the `NODE_ENV` environment variable:
-```bash
-# Development mode
-export NODE_ENV=development
-
-# Production mode  
-export NODE_ENV=production
-```
-
-### Method 3: API Call
-```bash
-# Switch to production mode
-curl -X PUT http://localhost:3000/api/config \
-  -H "Content-Type: application/json" \
-  -d '{"mode": "prod"}'
-
-# Switch to development mode
-curl -X PUT http://localhost:3000/api/config \
-  -H "Content-Type: application/json" \
-  -d '{"mode": "dev"}'
-```
-
-## 📋 What's Missing (Current Limitations)
-
-### 1. **Authentication & User Management**
-- User registration and login system is defined in schema but not implemented
-- No session management or user isolation
-- All research sessions are currently shared
-
-### 2. **Database Persistence**
-- System defaults to in-memory storage (`MemStorage`)
-- PostgreSQL integration exists but requires manual configuration
-- No data migration or backup capabilities
-
-### 3. **Error Handling & Monitoring**
-- Limited error recovery mechanisms
-- No comprehensive logging or monitoring
-- Missing rate limiting and API quota management
-
-### 4. **Advanced Features**
-- No real-time collaboration between users
-- Limited export capabilities (PDF, Word, etc.)
-- No version control for research sessions
-- Missing advanced search filters and sorting
-
-### 5. **Security & Compliance**
-- No input sanitization or validation
-- Missing audit trails for research sessions
-- No GDPR/privacy compliance features
-
-## 🛠️ How to Run QuestSage
+## 🚀 Quick Start
 
 ### Prerequisites
-- Node.js 18+ 
-- npm or yarn
-- PostgreSQL database (optional, for production)
+- **Node.js 18+** 
+- **npm** or **yarn**
+- **No database required** - runs entirely in-memory
 
 ### 1. **Clone and Install**
 ```bash
-git clone <repository-url>
+git clone https://github.com/M-Elfeki/QuestSage.git
 cd QuestSage
 npm install
 ```
 
 ### 2. **Environment Configuration**
-Create a `.env` file in the root directory:
+Copy the template and configure your API keys:
 ```bash
-# Database (optional for dev mode)
-DATABASE_URL=postgresql://user:password@localhost:5432/questsage
+cp config.template.env .env
+```
 
-# AI Service API Keys (required for production mode)
-OPENAI_API_KEY=your_openai_key
-GEMINI_API_KEY=your_gemini_key
-ANTHROPIC_API_KEY=your_anthropic_key
-PERPLEXITY_API_KEY=your_perplexity_key
+**Required for Basic Functionality:**
+```bash
+# Gemini API Key (required for dev mode)
+GEMINI_API_KEY=your_gemini_key_here
 
-# Search Service API Keys (required for production mode)
-GOOGLE_SEARCH_API_KEY=your_google_key
-REDDIT_API_KEY=your_reddit_key
-
-# System Configuration
+# Application Mode
 NODE_ENV=development
 PORT=3000
-MAX_DIALOGUE_ROUNDS=7
 ```
 
-### 3. **Database Setup (Optional)**
-If using PostgreSQL:
+**Required for Production Mode:**
 ```bash
-# Push schema to database
-npm run db:push
+# OpenAI Configuration
+OPENAI_API_KEY=your_openai_key_here
+OPENAI_MODEL=gpt-4o-mini
 
-# Or run migrations manually
-npx drizzle-kit push
+# Google Gemini Configuration  
+GEMINI_API_KEY=your_gemini_key_here
+GEMINI_MODEL=gemini-flash-2.5
+
+# Anthropic Configuration
+ANTHROPIC_API_KEY=your_anthropic_key_here
+ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+
+# Perplexity Configuration
+PERPLEXITY_API_KEY=your_perplexity_key_here
 ```
 
-### 4. **Start the Application**
+### 3. **Start the Application**
 
-#### Development Mode
+#### Development Mode (Recommended for first run)
 ```bash
 npm run dev
 ```
-- Starts both frontend and backend
-- Frontend: http://localhost:5173
-- Backend: http://localhost:3000
-- Hot reloading enabled
+- **Frontend**: http://localhost:5173 (Vite dev server)
+- **Backend**: http://localhost:3000 (Express API)
+- **Hot reloading** enabled
+- **Mock data** for testing without API costs
 
 #### Production Mode
 ```bash
@@ -170,96 +113,237 @@ npm run build
 # Start production server
 npm start
 ```
-- Serves built frontend from backend
-- Single port (default: 5000)
-- Optimized for production
+- **Single port**: http://localhost:5000 (or your configured PORT)
+- **Optimized** for production
+- **Requires all API keys** to be configured
 
-### 5. **Access the Application**
+### 4. **Access the Application**
 Open your browser and navigate to:
 - **Dev Mode**: http://localhost:5173
 - **Prod Mode**: http://localhost:5000 (or your configured PORT)
 
-## 🔧 Development Workflow
+## 🔧 Current Features
 
-### 1. **Research Pipeline Stages**
-1. **Intent Clarification**: AI analyzes user query and generates clarifying questions
-2. **Surface Research**: Initial search across multiple sources (Google, arXiv, Reddit)
-3. **Fact Extraction**: AI extracts key facts and identifies contradictions
-4. **Deep Research**: Targeted investigation using Perplexity for complex queries
-5. **Agent Selection**: AI orchestrator selects optimal agent configurations
-6. **Multi-Agent Dialogue**: Structured conversation between AI agents
-7. **Synthesis**: Final report generation combining all research findings
+### ✅ **Implemented & Working**
+- **Intent Clarification**: AI-powered query analysis and clarifying questions
+- **Multi-Source Research**: Web search, arXiv papers, Reddit discussions
+- **Fact Extraction**: AI-powered claim extraction with confidence scoring
+- **Agent Selection**: Dynamic AI agent configuration (ChatGPT & Gemini)
+- **Multi-Agent Dialogue**: Structured conversations between AI agents
+- **Research Synthesis**: Final report generation with evidence attribution
+- **Dynamic UI Metrics**: Real-time updates of research findings and source quality
+- **Markdown Rendering**: Beautiful formatting for agent dialogue responses
+- **Rate Limiting**: Intelligent API quota management with retry logic
+- **In-Memory Storage**: No database setup required
 
-### 2. **Adding New Features**
-- **New Search Sources**: Implement in `server/services/search/`
-- **New AI Providers**: Add to `server/services/llm.ts`
-- **UI Components**: Create in `client/src/components/`
-- **Database Schema**: Update `shared/schema.ts`
+### 🔄 **UI/UX Features**
+- **Continuous Flow**: Completed stages remain visible in "frozen" state
+- **Smooth Transitions**: Progressive disclosure with aesthetic appeal
+- **Real-time Updates**: Dynamic metrics that update based on research data
+- **Responsive Design**: Modern Tailwind CSS with mobile-friendly layout
+- **Progress Tracking**: Visual indicators for each research stage
 
-### 3. **Testing**
+### 🧪 **Testing Infrastructure**
+- **Comprehensive Test Suite**: 10+ test files covering all major functionality
+- **Mock API Responses**: No external API calls during testing
+- **LLM Integration Tests**: Model-specific behavior validation
+- **Workflow Tests**: End-to-end pipeline testing
+- **Coverage Reporting**: Detailed test coverage analysis
+
+## 📁 Project Structure
+
+```
+QuestSage/
+├── client/                 # React frontend
+│   ├── src/
+│   │   ├── components/    # UI components
+│   │   ├── pages/         # Page components
+│   │   ├── hooks/         # Custom React hooks
+│   │   └── lib/           # Frontend utilities
+│   ├── index.html         # Entry point
+│   └── vite.config.ts     # Vite configuration
+├── server/                 # Express.js backend
+│   ├── services/          # Core services
+│   │   ├── llm.ts         # AI service integration
+│   │   ├── search.ts      # Search engine services
+│   │   ├── agents.ts      # AI agent management
+│   │   ├── rate-limiter.ts # API rate limiting
+│   │   └── config.ts      # Configuration management
+│   ├── routes.ts          # API endpoints
+│   └── index.ts           # Server entry point
+├── tests/                  # Comprehensive test suite
+│   ├── llm-integration.test.ts    # LLM service tests
+│   ├── model-specific.test.ts     # Model behavior tests
+│   ├── workflow-integration.test.ts # End-to-end tests
+│   ├── search tests (arxiv, reddit, web)
+│   └── README.md          # Test documentation
+├── docs/                   # Documentation
+│   ├── QUICK_SETUP.md     # Quick start guide
+│   ├── SETUP.md           # Detailed setup instructions
+│   ├── SPECS.md           # System specifications
+│   └── replit.md          # Replit deployment guide
+├── config.template.env     # Environment configuration template
+├── package.json            # Dependencies and scripts
+└── README.md               # This file
+```
+
+## 🧪 Running Tests
+
+### All Tests
+```bash
+npm test
+```
+
+### Specific Test Categories
+```bash
+# LLM integration tests
+npm run test:llm
+
+# Search functionality tests
+npm run test:search
+
+# Integration tests
+npm run test:integration
+
+# Watch mode for development
+npm run test:watch
+
+# UI mode for visual testing
+npm run test:ui
+```
+
+### Test Coverage
+```bash
+npm test -- --coverage
+```
+
+## 📚 Documentation
+
+### **Quick Setup** (`docs/QUICK_SETUP.md`)
+- No database required setup
+- Fast development server startup
+- Basic configuration overview
+
+### **Detailed Setup** (`docs/SETUP.md`)
+- Complete environment configuration
+- API key setup instructions
+- Troubleshooting guide
+
+### **System Specifications** (`docs/SPECS.md`)
+- Detailed system architecture
+- API specifications
+- Workflow documentation
+
+### **Replit Deployment** (`docs/replit.md`)
+- Cloud deployment instructions
+- Replit-specific configuration
+
+## 🔒 Security Features
+
+### **Environment Protection**
+- `.env` files excluded from Git
+- API keys never committed
+- Comprehensive `.gitignore` protection
+
+### **Rate Limiting**
+- Intelligent API quota management
+- Automatic retry logic for quota exceeded errors
+- Configurable rate limits per service
+
+### **Input Validation**
+- Request size limits (50MB)
+- CORS protection for development
+- Error handling and logging
+
+## 🚨 Troubleshooting
+
+### **Common Issues**
+
+1. **Port Conflicts**
+   ```bash
+   # Change port in .env
+   PORT=3001
+   ```
+
+2. **API Key Errors**
+   ```bash
+   # Verify .env file exists
+   ls -la .env
+   
+   # Check API key format
+   cat .env | grep API_KEY
+   ```
+
+3. **Build Errors**
+   ```bash
+   # Clear dependencies
+   rm -rf node_modules package-lock.json
+   npm install
+   ```
+
+4. **Test Failures**
+   ```bash
+   # Check test environment
+   npm run test:llm
+   
+   # Run with verbose output
+   npm test -- --reporter=verbose
+   ```
+
+### **Debug Mode**
+Enable detailed logging:
+```bash
+DEBUG=questsage:*
+NODE_ENV=development
+npm run dev
+```
+
+## 🚀 Development Workflow
+
+### **Adding New Features**
+1. **New Search Sources**: Implement in `server/services/search/`
+2. **New AI Providers**: Add to `server/services/llm.ts`
+3. **UI Components**: Create in `client/src/components/`
+4. **Tests**: Add corresponding test files in `tests/`
+
+### **Code Quality**
 ```bash
 # Type checking
 npm run check
 
-# Run tests (when implemented)
+# Run tests
 npm test
+
+# Build verification
+npm run build
 ```
 
 ## 📊 System Capabilities
 
-### Research Sources
+### **Research Sources**
 - **Academic**: arXiv papers, peer-reviewed research
-- **Industry**: Google Search, industry reports
+- **Industry**: Google Search, industry reports  
 - **Social**: Reddit discussions, community insights
 - **Deep**: Perplexity AI for complex queries
 
-### AI Agents
+### **AI Agents**
 - **ChatGPT**: Inductive reasoning, pattern recognition
 - **Gemini**: Strategic analysis, framework application
 - **Claude**: High-quality synthesis and evaluation
 
-### Output Formats
+### **Output Formats**
 - **Research Reports**: Structured analysis with evidence
 - **Agent Dialogues**: Multi-perspective discussions
 - **Fact Sheets**: Key findings with source attribution
-- **Follow-up Essays**: Detailed responses to specific questions
-
-## 🚨 Troubleshooting
-
-### Common Issues
-
-1. **Port Conflicts**
-   - Check if ports 3000 or 5173 are in use
-   - Modify PORT environment variable
-
-2. **API Key Errors**
-   - Verify all required API keys are set
-   - Check API key permissions and quotas
-
-3. **Database Connection Issues**
-   - Verify DATABASE_URL format
-   - Ensure PostgreSQL is running
-   - Check network connectivity
-
-4. **Build Errors**
-   - Clear node_modules and reinstall
-   - Check Node.js version compatibility
-   - Verify TypeScript configuration
-
-### Debug Mode
-Enable detailed logging by setting:
-```bash
-DEBUG=questsage:*
-NODE_ENV=development
-```
+- **Dynamic Metrics**: Real-time research progress indicators
 
 ## 🤝 Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Implement your changes
-4. Add tests and documentation
-5. Submit a pull request
+1. **Fork** the repository
+2. **Create** a feature branch
+3. **Implement** your changes
+4. **Add tests** and documentation
+5. **Submit** a pull request
 
 ## 📄 License
 
@@ -268,10 +352,13 @@ MIT License - see LICENSE file for details
 ## 🆘 Support
 
 For issues, questions, or contributions:
-- Create an issue in the repository
-- Check the documentation
-- Review the code comments for implementation details
+- **Create an issue** in the repository
+- **Check the documentation** in the `docs/` folder
+- **Review the test suite** for implementation examples
+- **Check the code comments** for detailed explanations
 
 ---
 
 **QuestSage** - Transforming complex research into actionable insights through AI-powered multi-agent synthesis.
+
+*Last Updated: December 2024 - Current Version: 1.0.0*
