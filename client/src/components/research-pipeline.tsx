@@ -6,13 +6,12 @@ import { Progress } from "@/components/ui/progress";
 interface ResearchPipelineProps {
   sessionId: string | null;
   clarifiedIntent?: any;
-  isDevMode?: boolean;
   status?: 'pending' | 'active' | 'completed';
   onComplete: (data: any) => void;
   onProgress: (progress: number) => void;
 }
 
-export default function ResearchPipeline({ sessionId, clarifiedIntent, isDevMode = true, status = 'active', onComplete, onProgress }: ResearchPipelineProps) {
+export default function ResearchPipeline({ sessionId, clarifiedIntent, status = 'active', onComplete, onProgress }: ResearchPipelineProps) {
   const [currentPhase, setCurrentPhase] = useState<"surface" | "analysis" | "deep" | "complete">("surface");
   const [researchData, setResearchData] = useState<any>(null);
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
@@ -166,12 +165,8 @@ export default function ResearchPipeline({ sessionId, clarifiedIntent, isDevMode
           <div className={`text-sm ${status === 'completed' ? 'text-green-600' : 'text-gray-500'} font-medium`} data-testid="text-phase-indicator">
             Phase 2 of 5 {status === 'completed' ? '✓' : ''}
           </div>
-          <div className={`text-xs px-2 py-1 rounded-full ${
-            isDevMode 
-              ? 'bg-blue-100 text-blue-800' 
-              : 'bg-green-100 text-green-800'
-          }`}>
-            {isDevMode ? 'Dev Mode' : 'Prod Mode'}
+          <div className={`text-xs px-2 py-1 rounded-full bg-green-100 text-green-800`}>
+            Production Mode
           </div>
         </div>
       </div>

@@ -1,5 +1,68 @@
 import { configService } from "./config";
 import { truncateLog } from "./rate-limiter";
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+import { searchDuckDuckGo as searchDuckDuckGoAPI } from 'ts-duckduckgo-search';
+
+// Get __dirname equivalent for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+/**
+ * Load reddit_config.env file if it exists
+ * This file contains export statements like: export REDDIT_CLIENT_ID="value"
+ */
+function loadRedditConfig(): void {
+  try {
+    // Try multiple path resolutions to work in both dev and production
+    const possiblePaths = [
+      path.join(__dirname, '..', '..', 'reddit_config.env'),        // From server/services/ (dev)
+      path.join(process.cwd(), 'reddit_config.env'),                // From project root
+      path.resolve(__dirname, '../../reddit_config.env'),           // Alternative resolution
+      path.join(__dirname, '..', '..', '..', 'reddit_config.env'),  // From dist/ (production)
+    ];
+    
+    let configPath: string | null = null;
+    for (const possiblePath of possiblePaths) {
+      if (fs.existsSync(possiblePath)) {
+        configPath = possiblePath;
+        console.log(`✅ Found reddit_config.env at: ${configPath}`);
+        break;
+      }
+    }
+    
+    if (!configPath) {
+      console.warn(`⚠️  reddit_config.env not found. Tried: ${possiblePaths.join(', ')}`);
+      return;
+    }
+    
+    const configContent = fs.readFileSync(configPath, 'utf-8');
+    const lines = configContent.split('\n');
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      // Skip empty lines and comments
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      
+      // Parse export KEY="value" format
+      const exportMatch = trimmed.match(/^export\s+(\w+)="([^"]+)"/);
+      if (exportMatch) {
+        const [, key, value] = exportMatch;
+        // Only set if not already in process.env (env vars take precedence)
+        if (!process.env[key]) {
+          process.env[key] = value;
+          console.log(`✅ Loaded ${key} from reddit_config.env`);
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('Could not load reddit_config.env (this is optional):', error);
+  }
+}
+
+// Load Reddit config file at module initialization
+loadRedditConfig();
 
 export interface SearchResult {
   id: string;
@@ -9,6 +72,47 @@ export interface SearchResult {
   source: string;
   relevanceScore: number;
   metadata: any;
+}
+
+/**
+ * Retry utility with exponential backoff for search operations
+ */
+async function retrySearchOperation<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelay: number = 1000,
+  operationName: string = "Search operation"
+): Promise<T> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      if (attempt > 0) {
+        const delay = baseDelay * Math.pow(2, attempt - 1);
+        console.log(`🔄 [${operationName}] Retry attempt ${attempt}/${maxRetries} after ${delay}ms delay...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+      
+      return await fn();
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      const errorMsg = lastError.message;
+      
+      // Don't retry on certain errors
+      if (errorMsg.includes('404') || errorMsg.includes('401') || errorMsg.includes('403')) {
+        console.warn(`⚠️  [${operationName}] Non-retryable error: ${errorMsg.substring(0, 100)}`);
+        throw lastError;
+      }
+      
+      if (attempt < maxRetries) {
+        console.warn(`⚠️  [${operationName}] Attempt ${attempt + 1} failed: ${errorMsg.substring(0, 100)}`);
+      } else {
+        console.error(`❌ [${operationName}] All ${maxRetries + 1} attempts failed. Last error: ${errorMsg}`);
+      }
+    }
+  }
+  
+  throw lastError || new Error(`${operationName} failed after ${maxRetries + 1} attempts`);
 }
 
 export class WebScrapingService {
@@ -28,12 +132,22 @@ export class WebScrapingService {
   }
 
   async searchMultipleTerms(searchTerms: string[], maxResultsPerTerm: number = 10, progressCallback?: (progress: number, total: number, currentTerm: string) => void): Promise<SearchResult[]> {
+    if (!searchTerms || !Array.isArray(searchTerms) || searchTerms.length === 0) {
+      console.warn("⚠️ Web search: No search terms provided, using fallback terms");
+      searchTerms = ["technology", "research", "news"];
+    }
+    
     console.log(`🔍 Web search: Processing ${searchTerms.length} search terms with ${maxResultsPerTerm} results per term`);
     
     const allResults: SearchResult[] = [];
     
     for (let i = 0; i < searchTerms.length; i++) {
       const term = searchTerms[i];
+      
+      if (!term || typeof term !== 'string' || term.trim().length === 0) {
+        console.warn(`⚠️ Skipping invalid search term at index ${i}`);
+        continue;
+      }
       
       if (progressCallback) {
         progressCallback(i, searchTerms.length, term);
@@ -43,7 +157,8 @@ export class WebScrapingService {
         console.log(`🔍 Web searching term ${i + 1}/${searchTerms.length}: "${truncateLog(term)}"`);
         
         // Always use real search - no mock data
-        const termResults = await this.realSearch(term, maxResultsPerTerm);
+        const termResults = await this.realSearch(term.trim(), maxResultsPerTerm);
+        console.log(`✅ Found ${termResults.length} results for term "${truncateLog(term)}"`);
         allResults.push(...termResults);
         
         // Rate limiting between search terms
@@ -51,7 +166,7 @@ export class WebScrapingService {
           await this.delay_ms(2000); // 2 second delay between terms
         }
       } catch (error) {
-        console.error(`Error searching term "${term}":`, error);
+        console.error(`❌ Error searching term "${term}":`, error);
         // Continue with next term
         continue;
       }
@@ -93,36 +208,31 @@ export class WebScrapingService {
 
     const searchResults: Map<string, string> = new Map();
     
-    // Try different search sources in sequence
-    const sources = [
-      () => this.searchGoogle(query),
-      () => this.searchDuckDuckGo(query),
-      () => this.searchBing(query)
-    ];
-
-    for (const sourceFunc of sources) {
-      try {
-        const results = await sourceFunc();
-        if (results && results.size > 0) {
-          // Add results to our map
-          for (const [url, content] of Array.from(results.entries())) {
-            if (!searchResults.has(url)) {
-              searchResults.set(url, content);
-            }
-          }
-          
-          // Stop if we have enough results
-          if (searchResults.size >= Math.min(count, this.maxResults)) {
-            break;
+    // Use DuckDuckGo as the only search source
+    try {
+      console.log(`   Using DuckDuckGo...`);
+      const results = await this.searchDuckDuckGo(query, count);
+      if (results && results.size > 0) {
+        console.log(`   ✅ DuckDuckGo returned ${results.size} results`);
+        // Add results to our map
+        for (const [url, content] of Array.from(results.entries())) {
+          if (!searchResults.has(url)) {
+            searchResults.set(url, content);
           }
         }
-        
-        // Rate limiting delay
-        await this.delay_ms(this.delay);
-      } catch (error) {
-        console.error(`Error with search source:`, error);
-        continue;
+      } else {
+        console.log(`   ⚠️  DuckDuckGo returned 0 results`);
       }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.warn(`   ⚠️  DuckDuckGo error: ${errorMsg.substring(0, 100)}`);
+    }
+
+    if (searchResults.size === 0) {
+      console.warn(`⚠️  DuckDuckGo returned 0 results. This may indicate:`);
+      console.warn(`   - Search engine is blocking automated requests (CAPTCHA)`);
+      console.warn(`   - Network connectivity issues`);
+      console.warn(`   - Query may be too specific or have no results`);
     }
 
     // Convert to SearchResult format with full content retrieval
@@ -132,258 +242,123 @@ export class WebScrapingService {
     return validatedResults;
   }
 
-  private async searchDuckDuckGo(query: string): Promise<Map<string, string>> {
+  private async searchDuckDuckGoInstantAnswer(query: string): Promise<Map<string, string>> {
     try {
-      const url = 'https://duckduckgo.com/html/';
-      const params = new URLSearchParams({ q: query });
+      // DuckDuckGo Instant Answer API - no CAPTCHA, but limited results
+      const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
       
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      
-      const response = await fetch(`${url}?${params}`, {
+      const response = await fetch(url, {
         headers: {
           'User-Agent': this.userAgent,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-          'Accept-Encoding': 'gzip, deflate',
-          'Connection': 'keep-alive'
-        },
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        throw new Error(`DuckDuckGo returned ${response.status}`);
-      }
-
-      const html = await response.text();
-      const cheerio = await import('cheerio');
-      const $ = cheerio.load(html);
-      
-      const results = new Map<string, string>();
-      
-      // Find result links
-      $('.result__a').each((_, element) => {
-        const $link = $(element);
-        const href = $link.attr('href');
-        
-        if (href && href.startsWith('http')) {
-          const title = $link.text().trim();
-          const $snippet = $link.closest('.result').find('.result__snippet');
-          const snippet = $snippet.text().trim();
-          
-          const content = `${title}\n\n${snippet}`.trim();
-          
-          if (content && content.length > 30) {
-            results.set(href, content.substring(0, 500));
-          }
+          'Accept': 'application/json'
         }
       });
-
+      
+      if (!response.ok) {
+        return new Map();
+      }
+      
+      const data = await response.json();
+      const results = new Map<string, string>();
+      
+      // Add abstract if available
+      if (data.AbstractText && data.AbstractURL) {
+        results.set(data.AbstractURL, data.AbstractText.substring(0, 500));
+      }
+      
+      // Add related topics
+      if (data.RelatedTopics && Array.isArray(data.RelatedTopics)) {
+        for (const topic of data.RelatedTopics.slice(0, 5)) {
+          if (topic.FirstURL && topic.Text) {
+            results.set(topic.FirstURL, topic.Text.substring(0, 500));
+          }
+        }
+      }
+      
+      // Add results
+      if (data.Results && Array.isArray(data.Results)) {
+        for (const result of data.Results.slice(0, 5)) {
+          if (result.FirstURL && result.Text) {
+            results.set(result.FirstURL, result.Text.substring(0, 500));
+          }
+        }
+      }
+      
+      if (results.size > 0) {
+        console.log(`✅ [DuckDuckGo API] Found ${results.size} results via Instant Answer API`);
+      }
+      
       return results;
     } catch (error) {
-      console.error("DuckDuckGo search failed:", error);
+      console.warn(`⚠️  [DuckDuckGo API] Instant Answer API failed:`, error);
       return new Map();
     }
   }
 
-  private async searchBing(query: string): Promise<Map<string, string>> {
-    try {
-      const url = 'https://www.bing.com/search';
-      const params = new URLSearchParams({ q: query, count: '10' });
+  private async searchDuckDuckGo(query: string, count: number = 10): Promise<Map<string, string>> {
+    return await retrySearchOperation(async () => {
+      // Use ts-duckduckgo-search package (similar to Python duckduckgo-search)
+      console.log(`🔍 [DuckDuckGo] Searching: ${truncateLog(query)}`);
       
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      
-      const response = await fetch(`${url}?${params}`, {
-        headers: {
-          'User-Agent': this.userAgent,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5'
-        },
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        throw new Error(`Bing returned ${response.status}`);
-      }
-
-      const html = await response.text();
-      const cheerio = await import('cheerio');
-      const $ = cheerio.load(html);
-      
-      const results = new Map<string, string>();
-      
-      // Find Bing result links
-      $('.b_algo').each((_, element) => {
-        const $result = $(element);
-        const $title = $result.find('h2 a');
-        const $snippet = $result.find('.b_caption p, .b_snippet');
-        
-        let href = $title.attr('href');
-        const title = $title.text().trim();
-        const snippet = $snippet.text().trim();
-        
-        // Extract actual URL from Bing redirect
-        if (href && href.includes('/ck/a?')) {
-          const urlMatch = href.match(/u=a1([^&]+)/);
-          if (urlMatch) {
-            try {
-              href = Buffer.from(urlMatch[1], 'base64').toString('utf-8');
-            } catch (e) {
-              // Keep original if decoding fails
-            }
-          }
-        }
-        
-        if (href && href.startsWith('http') && title && snippet) {
-          const content = `${title}\n\n${snippet}`.trim();
-          if (content.length > 30) {
-            results.set(href, content.substring(0, 500));
-          }
-        }
-      });
-
-      return results;
-    } catch (error) {
-      console.error("Bing search failed:", error);
-      return new Map();
-    }
-  }
-
-  private async searchGoogle(query: string): Promise<Map<string, string>> {
-    try {
-      // First try Google Search API if configured
-      if (process.env.GOOGLE_SEARCH_API_KEY && process.env.GOOGLE_SEARCH_ENGINE_ID) {
-        const apiKey = process.env.GOOGLE_SEARCH_API_KEY;
-        const engineId = process.env.GOOGLE_SEARCH_ENGINE_ID;
-        const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${engineId}&q=${encodeURIComponent(query)}&num=10`;
-        
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
-        
-        const response = await fetch(url, {
-          headers: {
-            'Accept': 'application/json'
-          },
-          signal: controller.signal
+      try {
+        const results = await searchDuckDuckGoAPI(query, {
+          maxResults: Math.min(count, 10), // Limit to 10 results per query
+          userAgent: this.userAgent,
+          safeSearch: 'moderate'
         });
+
+        const resultMap = new Map<string, string>();
         
-        clearTimeout(timeoutId);
-
-        if (response.ok) {
-          const data = await response.json();
-          const results = new Map<string, string>();
-          
-          if (data.items && Array.isArray(data.items)) {
-            for (const item of data.items) {
-              const url = item.link;
-              const title = item.title || '';
-              const snippet = item.snippet || '';
-              
-              if (url && url.startsWith('http') && title) {
-                const content = `${title}\n\n${snippet}`.trim();
-                if (content.length > 30) {
-                  results.set(url, content.substring(0, 500));
-                }
-              }
-            }
-          }
-          
-          if (results.size > 0) {
-            return results;
-          }
-        }
-      }
-      
-      // Fallback to Google News scraping (no API required)
-      return await this.searchGoogleNews(query);
-    } catch (error) {
-      console.error("Google search failed:", error);
-      // Try Google News as fallback
-      return await this.searchGoogleNews(query);
-    }
-  }
-  
-  private async searchGoogleNews(query: string): Promise<Map<string, string>> {
-    try {
-      const url = 'https://news.google.com/search';
-      const params = new URLSearchParams({ 
-        q: query, 
-        hl: 'en', 
-        gl: 'US',
-        ceid: 'US:en'
-      });
-      
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      
-      const response = await fetch(`${url}?${params}`, {
-        headers: {
-          'User-Agent': this.userAgent,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5'
-        },
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        throw new Error(`Google News returned ${response.status}`);
-      }
-
-      const html = await response.text();
-      const cheerio = await import('cheerio');
-      const $ = cheerio.load(html);
-      
-      const results = new Map<string, string>();
-      
-      // Find news articles
-      $('article').each((_, element) => {
-        const $article = $(element);
-        const $link = $article.find('a');
-        const href = $link.attr('href');
-        
-        if (href && (href.startsWith('./articles/') || href.startsWith('./read/'))) {
-          // Extract the actual URL from Google News redirect
-          const actualUrl = this.extractGoogleNewsUrl(href);
-          if (actualUrl) {
-            const title = $article.find('h3, h4').first().text().trim();
-            const snippet = $article.find('time').parent().text().trim();
-            
-            if (title) {
-              const content = `${title}\n\n${snippet}`.trim();
-              if (content.length > 30) {
-                results.set(actualUrl, content.substring(0, 500));
-              }
+        for (const result of results) {
+          // Filter out DuckDuckGo redirect URLs (ads/sponsored links)
+          if (result.url && 
+              result.url.startsWith('http') && 
+              !result.url.includes('duckduckgo.com/y.js') &&
+              !result.url.includes('duckduckgo.com/l/') &&
+              result.title) {
+            const content = `${result.title}\n\n${result.description || ''}`.trim();
+            if (content.length > 30) {
+              resultMap.set(result.url, content.substring(0, 500));
             }
           }
         }
-      });
 
-      return results;
-    } catch (error) {
-      console.error("Google News search failed:", error);
+        if (resultMap.size > 0) {
+          console.log(`✅ [DuckDuckGo] Found ${resultMap.size} results for query: ${truncateLog(query)}`);
+          return resultMap;
+        } else {
+          console.warn(`⚠️  [DuckDuckGo] No valid results found for query: ${truncateLog(query)} (received ${results.length} raw results)`);
+          return new Map();
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.warn(`⚠️  [DuckDuckGo] Search error: ${errorMsg}`);
+        
+        // Check if it's a CAPTCHA/blocking error
+        if (errorMsg.toLowerCase().includes('captcha') || 
+            errorMsg.toLowerCase().includes('blocked') ||
+            errorMsg.toLowerCase().includes('403') ||
+            errorMsg.toLowerCase().includes('challenge')) {
+          throw new Error(`DuckDuckGo search blocked: ${errorMsg}`);
+        }
+        
+        throw error;
+      }
+    }, 3, 2000, `DuckDuckGo search: ${truncateLog(query)}`).catch(async (error) => {
+      console.error(`❌ [DuckDuckGo] Search failed after retries for "${truncateLog(query)}":`, error);
+      
+      // Try Instant Answer API as fallback
+      console.log(`🔄 [DuckDuckGo] Trying Instant Answer API as fallback...`);
+      const instantResults = await this.searchDuckDuckGoInstantAnswer(query);
+      if (instantResults.size > 0) {
+        console.log(`✅ [DuckDuckGo] Fallback API returned ${instantResults.size} results`);
+        return instantResults;
+      }
+      
       return new Map();
-    }
+    });
   }
-  
-  private extractGoogleNewsUrl(googleNewsPath: string): string | null {
-    try {
-      // Google News uses a redirect pattern
-      if (googleNewsPath.includes('./articles/')) {
-        // For now, return a placeholder - in production, you'd need to follow the redirect
-        return `https://news.google.com${googleNewsPath.substring(1)}`;
-      }
-      return null;
-    } catch (error) {
-      return null;
-    }
-  }
+
 
   private isValidUrl(url: string): boolean {
     try {
@@ -423,29 +398,16 @@ export class WebScrapingService {
 
   private async fetchUrlContent(url: string): Promise<string | null> {
     try {
-      // Decode Bing redirect URLs if present
-      if (url.includes('bing.com/ck/a')) {
-        const urlMatch = url.match(/u=a1([^&]+)/);
-        if (urlMatch) {
-          try {
-            // Decode the actual URL from Bing's redirect
-            const encodedUrl = urlMatch[1];
-            url = Buffer.from(encodedUrl, 'base64').toString('utf-8');
-          } catch (e) {
-            // If decoding fails, skip this URL
-            return null;
-          }
-        }
-      }
-      
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
       
       const response = await fetch(url, {
         headers: {
           'User-Agent': this.userAgent,
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5'
+          'Accept-Language': 'en-US,en;q=0.5',
+          'Accept-Encoding': 'identity', // Don't use gzip to avoid issues
+          'Connection': 'close'
         },
         signal: controller.signal,
         redirect: 'follow'
@@ -458,30 +420,42 @@ export class WebScrapingService {
       }
 
       const html = await response.text();
+      
+      // Check for error pages
+      if (this.isErrorPage(html)) {
+        return null;
+      }
+      
       const cheerio = await import('cheerio');
       const $ = cheerio.load(html);
       
       // Remove script and style elements
       $('script').remove();
       $('style').remove();
+      $('nav').remove();
+      $('header').remove();
+      $('footer').remove();
       
       // Try to get main content from various selectors
       let content = '';
       const contentSelectors = [
         'main', 'article', '[role="main"]', '.content', '#content',
-        '.post-content', '.entry-content', '.article-body', '.story-body'
+        '.post-content', '.entry-content', '.article-body', '.story-body',
+        '.post', '.entry', '.article-content'
       ];
       
       for (const selector of contentSelectors) {
         const element = $(selector).first();
         if (element.length > 0) {
           content = element.text();
-          break;
+          if (content.length > 200) break; // Found substantial content
         }
       }
       
       // Fallback to body if no specific content area found
-      if (!content) {
+      if (!content || content.length < 200) {
+        // Remove common non-content elements from body
+        $('body').find('nav, header, footer, aside, .sidebar, .menu').remove();
         content = $('body').text();
       }
       
@@ -498,9 +472,29 @@ export class WebScrapingService {
       
       return content.substring(0, 5000); // Limit to 5000 chars
     } catch (error) {
-      console.error(`Failed to fetch content from ${url}:`, error);
+      // Silently fail - we'll use snippet instead
       return null;
     }
+  }
+
+  private isErrorPage(html: string): boolean {
+    const lowerHtml = html.toLowerCase();
+    const errorIndicators = [
+      'access denied',
+      '403 forbidden',
+      '404 not found',
+      '500 internal server error',
+      'page not found',
+      'error occurred',
+      'captcha',
+      'robot check',
+      'blocked',
+      'temporarily unavailable',
+      'cloudflare',
+      'checking your browser'
+    ];
+    
+    return errorIndicators.some(indicator => lowerHtml.includes(indicator));
   }
 
   private async validateAndFormatResultsWithFullContent(results: Map<string, string>, maxCount: number): Promise<SearchResult[]> {
@@ -514,23 +508,33 @@ export class WebScrapingService {
         // Validate URL first
         if (!this.isValidUrl(url)) continue;
         
-        // Fetch full content from URL
-        const fullContent = await this.fetchUrlContent(url);
-        
-        // Skip if no content could be retrieved
-        if (!fullContent) {
-          console.log(`Skipping ${truncateLog(url)} - no content retrieved`);
-          continue;
-        }
-        
         // Extract title from snippet (first line usually)
         const lines = snippet.split('\n').filter(line => line.trim());
         const title = lines[0] || 'Web Result';
+        const contentPreview = snippet.substring(0, 1000); // Use snippet as content preview
+        
+        // Try to fetch full content, but don't fail if it doesn't work
+        let fullContent = contentPreview;
+        try {
+          const fetchedContent = await this.fetchUrlContent(url);
+          if (fetchedContent && fetchedContent.length > contentPreview.length) {
+            fullContent = fetchedContent;
+          }
+        } catch (fetchError) {
+          // Use snippet if fetch fails - this is acceptable
+          console.log(`Using snippet for ${truncateLog(url)} - full content fetch failed`);
+        }
+        
+        // Validate that we have meaningful content
+        if (!this.hasMeaningfulContent(fullContent)) {
+          console.log(`Skipping ${truncateLog(url)} - insufficient content`);
+          continue;
+        }
         
         validatedResults.push({
           id: `web-${Date.now()}-${index}`,
           title: title.substring(0, 200),
-          content: fullContent,
+          content: fullContent.substring(0, 1000),
           url: url,
           source: "web",
           relevanceScore: Math.max(95 - index * 5, 50),
@@ -546,7 +550,7 @@ export class WebScrapingService {
         
         // Small delay between fetches
         if (index < maxCount) {
-          await this.delay_ms(500);
+          await this.delay_ms(300); // Reduced delay
         }
       } catch (error) {
         console.error(`Error processing ${truncateLog(url)}:`, error);
@@ -692,7 +696,7 @@ export class ArxivSearchService {
         results.push({
           id: `arxiv-${Date.now()}-${index}`,
           title: title.trim(),
-          content: content, // Full abstract, not truncated
+          content: content.substring(0, 1000), // Limit to first 1000 characters
           url: id,
           source: "arxiv",
           relevanceScore: Math.max(90 - index * 3, 60),
@@ -723,11 +727,76 @@ export class RedditSearchService {
   private clientId?: string;
   private clientSecret?: string;
   private userAgent: string;
+  private accessToken: string | null = null;
+  private tokenExpiry?: number;
 
   constructor() {
+    // Load from environment variables (loaded from reddit_config.env or set directly)
+    // reddit_config.env is loaded automatically at module initialization
     this.clientId = process.env.REDDIT_CLIENT_ID;
     this.clientSecret = process.env.REDDIT_CLIENT_SECRET;
-    this.userAgent = process.env.REDDIT_USER_AGENT || "QuestSage/1.0";
+    // Use a proper User-Agent format that Reddit expects
+    this.userAgent = process.env.REDDIT_USER_AGENT || "QuestSage/1.0 by /u/questsage";
+    
+    // Log credential status for debugging
+    if (this.clientId && this.clientSecret) {
+      console.log(`✅ [RedditSearchService] Credentials loaded: Client ID: ${this.clientId.substring(0, 10)}..., Secret: ${this.clientSecret ? 'SET' : 'NOT SET'}`);
+    } else {
+      console.warn(`⚠️  [RedditSearchService] No credentials found. Reddit search will fail.`);
+      console.warn(`   Check that reddit_config.env exists and contains REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET`);
+    }
+  }
+
+  private async getAccessToken(): Promise<string | null> {
+    // If we have a valid token, return it
+    if (this.accessToken && this.tokenExpiry && Date.now() < this.tokenExpiry) {
+      return this.accessToken;
+    }
+
+    // If no credentials, return null (will use unauthenticated requests)
+    if (!this.clientId || !this.clientSecret) {
+      console.log('ℹ️  [Reddit] No credentials configured - will attempt unauthenticated requests');
+      return null;
+    }
+
+    try {
+      // Get OAuth token using client credentials flow
+      const authString = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
+      const response = await fetch('https://www.reddit.com/api/v1/access_token', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Basic ${authString}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': this.userAgent
+        },
+        body: 'grant_type=client_credentials'
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        console.warn(`⚠️  [Reddit] OAuth failed (${response.status}): ${errorText.substring(0, 200)}`);
+        console.warn('   Will attempt unauthenticated requests (may fail due to Reddit blocking)');
+        return null;
+      }
+
+      const data = await response.json();
+      this.accessToken = (data.access_token as string) || null;
+      
+      if (this.accessToken) {
+        // Set expiry to 45 minutes (tokens last 1 hour, refresh early)
+        this.tokenExpiry = Date.now() + (45 * 60 * 1000);
+        console.log(`✅ [Reddit] OAuth token acquired successfully (expires in 45 min)`);
+        return this.accessToken;
+      } else {
+        console.warn(`⚠️  [Reddit] OAuth response missing access_token: ${JSON.stringify(data)}`);
+        return null;
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.warn(`⚠️  [Reddit] OAuth error: ${errorMsg}`);
+      console.warn('   Will attempt unauthenticated requests (may fail due to Reddit blocking)');
+      return null;
+    }
   }
 
   async search(query: string, count: number = 10): Promise<SearchResult[]> {
@@ -737,30 +806,45 @@ export class RedditSearchService {
   }
 
   async searchMultipleSubreddits(subreddits: string[], maxPostsPerSubreddit: number = 50, maxCommentsPerPost: number = 100, progressCallback?: (progress: number, total: number, currentSubreddit: string) => void): Promise<SearchResult[]> {
-    console.log(`🔍 Reddit search: Processing ${subreddits.length} subreddits with ${maxPostsPerSubreddit} posts (${maxCommentsPerPost} comments each)`);
+    // Clean and validate subreddits - remove r/ prefix if present
+    const cleanedSubreddits = (subreddits || [])
+      .map(sub => typeof sub === 'string' ? sub.replace(/^r\//, '').trim() : '')
+      .filter(sub => sub.length > 0);
+    
+    if (cleanedSubreddits.length === 0) {
+      console.warn("⚠️ Reddit search: No valid subreddits provided, using fallback subreddits");
+      cleanedSubreddits.push("MachineLearning", "technology", "programming");
+    }
+    
+    console.log(`🔍 Reddit search: Processing ${cleanedSubreddits.length} subreddits with ${maxPostsPerSubreddit} posts (${maxCommentsPerPost} comments each)`);
     
     const allResults: SearchResult[] = [];
+    const subredditStats: { subreddit: string; success: boolean; resultCount: number; error?: string }[] = [];
     
-    for (let i = 0; i < subreddits.length; i++) {
-      const subreddit = subreddits[i];
+    for (let i = 0; i < cleanedSubreddits.length; i++) {
+      const subreddit = cleanedSubreddits[i];
       
       if (progressCallback) {
-        progressCallback(i, subreddits.length, subreddit);
+        progressCallback(i, cleanedSubreddits.length, subreddit);
       }
       
       try {
-        console.log(`🔍 Reddit searching subreddit ${i + 1}/${subreddits.length}: r/${truncateLog(subreddit)}"`);
+        console.log(`🔍 Reddit searching subreddit ${i + 1}/${cleanedSubreddits.length}: r/${truncateLog(subreddit)}`);
         
         // Always use real search - no mock data
         const subredditResults = await this.realSearchSubreddit(subreddit, maxPostsPerSubreddit, maxCommentsPerPost);
+        console.log(`✅ Found ${subredditResults.length} results from r/${subreddit}`);
         allResults.push(...subredditResults);
+        subredditStats.push({ subreddit, success: true, resultCount: subredditResults.length });
         
         // Rate limiting between subreddits
-        if (i < subreddits.length - 1) {
+        if (i < cleanedSubreddits.length - 1) {
           await this.delay(2000); // 2 second delay between subreddits
         }
       } catch (error) {
-        console.error(`Error searching subreddit r/${subreddit}:`, error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error(`❌ Error searching subreddit r/${subreddit}:`, errorMsg);
+        subredditStats.push({ subreddit, success: false, resultCount: 0, error: errorMsg });
         // Continue with next subreddit
         continue;
       }
@@ -769,10 +853,21 @@ export class RedditSearchService {
     // Remove duplicates based on URL
     const uniqueResults = this.removeDuplicatesReddit(allResults);
     
-    console.log(`🔍 Reddit search completed: ${uniqueResults.length} unique results from ${subreddits.length} subreddits`);
+    // Log summary statistics
+    const successful = subredditStats.filter(s => s.success).length;
+    const failed = subredditStats.filter(s => !s.success).length;
+    const totalFromSuccessful = subredditStats.filter(s => s.success).reduce((sum, s) => sum + s.resultCount, 0);
+    
+    console.log(`🔍 Reddit search completed: ${uniqueResults.length} unique results from ${cleanedSubreddits.length} subreddits`);
+    console.log(`   ✅ Successful: ${successful} subreddits (${totalFromSuccessful} results)`);
+    if (failed > 0) {
+      console.log(`   ❌ Failed: ${failed} subreddits`);
+      const failedSubs = subredditStats.filter(s => !s.success).map(s => `r/${s.subreddit}`).join(', ');
+      console.log(`   Failed subreddits: ${failedSubs}`);
+    }
     
     if (progressCallback) {
-      progressCallback(subreddits.length, subreddits.length, "Completed");
+      progressCallback(cleanedSubreddits.length, cleanedSubreddits.length, "Completed");
     }
     
     return uniqueResults;
@@ -802,16 +897,25 @@ export class RedditSearchService {
 
       const cutoffTime = Date.now() / 1000 - (72 * 60 * 60); // 72 hours ago in Unix timestamp
 
+      // Get access token if available
+      const token = await this.getAccessToken();
+      const baseUrl = token ? 'https://oauth.reddit.com' : 'https://www.reddit.com';
+
       for (const subredditName of relevantSubreddits.slice(0, 4)) { // Increase to 4 subreddits for better coverage
         try {
           // First, get the most recent posts from the subreddit
-          const recentPostsUrl = `https://www.reddit.com/r/${subredditName}/new.json?limit=20&t=day`;
+          const recentPostsUrl = `${baseUrl}/r/${subredditName}/new.json?limit=20&t=day`;
           
-          const recentResponse = await fetch(recentPostsUrl, {
-            headers: {
-              'User-Agent': this.userAgent
-            }
-          });
+          const headers: Record<string, string> = {
+            'User-Agent': this.userAgent,
+            'Accept': 'application/json'
+          };
+          
+          if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+          }
+          
+          const recentResponse = await fetch(recentPostsUrl, { headers });
 
           if (!recentResponse.ok) {
             console.warn(`Reddit API error for r/${subredditName} recent posts: ${recentResponse.status}`);
@@ -839,21 +943,28 @@ export class RedditSearchService {
 
               try {
                 // Fetch comments for each relevant post
-                const commentsUrl = `https://www.reddit.com/r/${subredditName}/comments/${post.id}.json?limit=10&sort=top`;
+                const commentsUrl = token
+                  ? `https://oauth.reddit.com/r/${subredditName}/comments/${post.id}.json?limit=10&sort=top`
+                  : `https://www.reddit.com/r/${subredditName}/comments/${post.id}.json?limit=10&sort=top`;
                 
                 await this.delay(500); // Rate limiting between comment requests
                 
-                const commentsResponse = await fetch(commentsUrl, {
-                  headers: {
-                    'User-Agent': this.userAgent
-                  }
-                });
+                const commentHeaders: Record<string, string> = {
+                  'User-Agent': this.userAgent,
+                  'Accept': 'application/json'
+                };
+                
+                if (token) {
+                  commentHeaders['Authorization'] = `Bearer ${token}`;
+                }
+                
+                const commentsResponse = await fetch(commentsUrl, { headers: commentHeaders });
 
                 let topComments: string[] = [];
                 if (commentsResponse.ok) {
                   const commentsData = await commentsResponse.json();
                   
-                  // Extract top 10 most relevant comments
+                  // Extract top comments (limited to 10 per post)
                   if (Array.isArray(commentsData) && commentsData[1]?.data?.children) {
                     topComments = commentsData[1].data.children
                       .filter((comment: any) => {
@@ -866,7 +977,7 @@ export class RedditSearchService {
                         const scoreB = (b.data?.score || 0) + (b.data?.ups || 0);
                         return scoreB - scoreA;
                       })
-                      .slice(0, 10) // Keep exactly top 10 most relevant comments
+                      .slice(0, 10) // Limit to 10 comments per post
                       .map((comment: any) => {
                         const body = comment.data?.body || '';
                         const truncated = body.length > 200 ? body.substring(0, 200) + '...' : body;
@@ -960,130 +1071,234 @@ export class RedditSearchService {
     const results: SearchResult[] = [];
     const cutoffTime = Date.now() / 1000 - (72 * 60 * 60); // 72 hours ago
 
-    try {
-      // Get recent posts from the subreddit
-      const postsUrl = `https://www.reddit.com/r/${subreddit}/new.json?limit=${maxPosts}&t=week`;
+    return await retrySearchOperation(async () => {
+      // ALWAYS try to get access token first - Reddit blocks unauthenticated requests
+      const token = await this.getAccessToken();
       
-      const postsResponse = await fetch(postsUrl, {
-        headers: {
-          'User-Agent': this.userAgent
-        }
-      });
+      // Use oauth.reddit.com when we have credentials (even if token acquisition failed, try authenticated endpoint)
+      // Only use www.reddit.com if we have NO credentials at all
+      const hasCredentials = this.clientId && this.clientSecret;
+      const baseUrl = (hasCredentials && token) ? 'https://oauth.reddit.com' : 
+                      hasCredentials ? 'https://oauth.reddit.com' : // Try authenticated even if token failed
+                      'https://www.reddit.com';
+      
+      // Get recent posts from the subreddit
+      const postsUrl = `${baseUrl}/r/${subreddit}/new.json?limit=${Math.min(maxPosts, 100)}&t=week`;
+      
+      const authStatus = token ? 'authenticated' : (hasCredentials ? 'credentials-available-but-no-token' : 'unauthenticated');
+      console.log(`🔍 [Reddit] Fetching posts from r/${subreddit} (${authStatus})`);
+      
+      const headers: Record<string, string> = {
+        'User-Agent': this.userAgent,
+        'Accept': 'application/json'
+      };
+      
+      // Always include Authorization header if we have a token
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      const postsResponse = await fetch(postsUrl, { headers });
 
       if (!postsResponse.ok) {
-        console.warn(`Reddit API error for r/${subreddit}: ${postsResponse.status}`);
-        return [];
+        const errorText = await postsResponse.text().catch(() => '');
+        const errorPreview = errorText.substring(0, 200);
+        
+        // Categorize the error
+        if (postsResponse.status === 403) {
+          // If we got 403 with credentials but no token, try to get token and retry
+          if (hasCredentials && !token) {
+            console.warn(`⚠️  [Reddit] r/${subreddit} returned 403 without token - attempting to acquire token...`);
+            // Token acquisition should have been attempted, but retry once more
+            const retryToken = await this.getAccessToken();
+            if (retryToken) {
+              console.log(`✅ [Reddit] Token acquired, retrying r/${subreddit}...`);
+              headers['Authorization'] = `Bearer ${retryToken}`;
+              const retryResponse = await fetch(postsUrl, { headers });
+              if (retryResponse.ok) {
+                const retryData = await retryResponse.json();
+                return this.processRedditPosts(retryData, subreddit, maxPosts, maxCommentsPerPost, cutoffTime);
+              }
+            }
+          }
+          
+          // Check if it's a private/restricted subreddit
+          if (errorText.includes('private') || errorText.includes('restricted') || errorText.includes('banned')) {
+            const errorMsg = `r/${subreddit} is private/restricted/banned`;
+            console.warn(`⚠️  [Reddit] ${errorMsg}`);
+            throw new Error(errorMsg);
+          } else {
+            // 403 without clear reason - likely Reddit blocking unauthenticated requests
+            if (!hasCredentials) {
+              const errorMsg = `r/${subreddit} returned 403 - Reddit requires authentication. Please configure REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET`;
+              console.warn(`⚠️  [Reddit] ${errorMsg}`);
+              throw new Error(errorMsg);
+            } else if (!token) {
+              const errorMsg = `r/${subreddit} returned 403 - OAuth token acquisition failed. Check Reddit API credentials.`;
+              console.warn(`⚠️  [Reddit] ${errorMsg}`);
+              throw new Error(errorMsg);
+            } else {
+              const errorMsg = `r/${subreddit} returned 403 even with authentication - may be private/restricted`;
+              console.warn(`⚠️  [Reddit] ${errorMsg}`);
+              throw new Error(errorMsg);
+            }
+          }
+        } else if (postsResponse.status === 429) {
+          const errorMsg = `r/${subreddit} rate limited (429)`;
+          console.warn(`⚠️  [Reddit] ${errorMsg} - waiting before retry...`);
+          await this.delay(5000); // Wait 5 seconds for rate limit
+          throw new Error(errorMsg); // Will trigger retry
+        } else {
+          const errorMsg = `Reddit API error for r/${subreddit}: ${postsResponse.status} - ${errorPreview}`;
+          console.warn(`⚠️  [Reddit] ${errorMsg}`);
+          throw new Error(errorMsg);
+        }
       }
 
       const postsData = await postsResponse.json();
-      
-      if (postsData.data && postsData.data.children) {
-        const posts = postsData.data.children
-          .map((child: any) => child.data)
-          .filter((post: any) => post.created_utc >= cutoffTime)
-          .slice(0, maxPosts);
+      console.log(`✅ [Reddit] Successfully fetched posts from r/${subreddit}`);
+      return this.processRedditPosts(postsData, subreddit, maxPosts, maxCommentsPerPost, cutoffTime);
+    }, 3, 2000, `Reddit search: r/${subreddit}`).catch((error) => {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error(`❌ [Reddit] Search failed after retries for r/${subreddit}: ${errorMsg}`);
+      return [];
+    });
+  }
 
-        for (const post of posts) {
-          try {
-            // Fetch comments for each post
-            const commentsUrl = `https://www.reddit.com/r/${subreddit}/comments/${post.id}.json?limit=${Math.min(maxCommentsPerPost, 100)}&sort=top`;
-            
-            await this.delay(300); // Rate limiting between comment requests
-            
-            const commentsResponse = await fetch(commentsUrl, {
-              headers: {
-                'User-Agent': this.userAgent
-              }
-            });
+  private async processRedditPosts(postsData: any, subreddit: string, maxPosts: number, maxCommentsPerPost: number, cutoffTime: number): Promise<SearchResult[]> {
+    const results: SearchResult[] = [];
+    const token = await this.getAccessToken();
+    
+    if (postsData.data && postsData.data.children) {
+      const posts = postsData.data.children
+        .map((child: any) => child.data)
+        .filter((post: any) => post.created_utc >= cutoffTime)
+        .slice(0, maxPosts);
 
-            let topComments: string[] = [];
-            if (commentsResponse.ok) {
-              const commentsData = await commentsResponse.json();
-              
-              // Extract top 10 most relevant comments
-              if (Array.isArray(commentsData) && commentsData[1]?.data?.children) {
-                topComments = commentsData[1].data.children
-                  .slice(0, Math.min(maxCommentsPerPost, 100))
-                  .filter((comment: any) => {
-                    const body = comment.data?.body;
-                    return body && body !== '[deleted]' && body !== '[removed]' && body.length > 20;
-                  })
-                  .sort((a: any, b: any) => {
-                    // Sort by score (upvotes - downvotes) to get most relevant
-                    const scoreA = (a.data?.score || 0) + (a.data?.ups || 0);
-                    const scoreB = (b.data?.score || 0) + (b.data?.ups || 0);
-                    return scoreB - scoreA;
-                  })
-                  .slice(0, 10) // Keep exactly top 10 most relevant comments
-                  .map((comment: any) => {
-                    const body = comment.data?.body || '';
-                    const truncated = body.length > 200 ? body.substring(0, 200) + '...' : body;
-                    return truncated;
-                  });
-              }
-            }
+      console.log(`📊 [Reddit] Processing ${posts.length} posts from r/${subreddit}`);
 
-            // Combine post content with top comments
-            let content = post.selftext || post.title;
-            if (topComments.length > 0) {
-              content += '\n\nTop comments:\n' + topComments.map(c => `• ${c}`).join('\n');
-            }
-            
-            // Truncate if too long
-            if (content.length > 1500) {
-              content = content.substring(0, 1500) + '...';
-            }
-
-            results.push({
-              id: `reddit-${subreddit}-${post.id}`,
-              title: post.title,
-              content: content,
-              url: `https://reddit.com${post.permalink}`,
-              source: "reddit",
-              relevanceScore: Math.max(85 - results.length * 1, 70),
-              metadata: {
-                subreddit: `r/${subreddit}`,
-                upvotes: post.ups || 0,
-                comments: post.num_comments || 0,
-                created_utc: post.created_utc,
-                author: post.author || '[deleted]',
-                topCommentsIncluded: topComments.length,
-                postScore: post.score || 0
-              }
-            });
-
-          } catch (postError) {
-            console.warn(`Error fetching comments for post ${post.id}:`, postError);
-            // Still add the post without comments
-            let content = post.selftext || post.title;
-            if (content.length > 400) {
-              content = content.substring(0, 400) + '...';
-            }
-
-            results.push({
-              id: `reddit-${subreddit}-${post.id}`,
-              title: post.title,
-              content: content,
-              url: `https://reddit.com${post.permalink}`,
-              source: "reddit",
-              relevanceScore: Math.max(80 - results.length * 1, 65),
-              metadata: {
-                subreddit: `r/${subreddit}`,
-                upvotes: post.ups || 0,
-                comments: post.num_comments || 0,
-                created_utc: post.created_utc,
-                author: post.author || '[deleted]',
-                topCommentsIncluded: 0,
-                postScore: post.score || 0
-              }
-            });
+      for (let i = 0; i < posts.length; i++) {
+        const post = posts[i];
+        try {
+          // Fetch comments for each post with retry logic
+          const commentsUrl = token 
+            ? `https://oauth.reddit.com/r/${subreddit}/comments/${post.id}.json?limit=${Math.min(maxCommentsPerPost, 100)}&sort=top`
+            : `https://www.reddit.com/r/${subreddit}/comments/${post.id}.json?limit=${Math.min(maxCommentsPerPost, 100)}&sort=top`;
+          
+          await this.delay(300); // Rate limiting between comment requests
+          
+          const headers: Record<string, string> = {
+            'User-Agent': this.userAgent,
+            'Accept': 'application/json'
+          };
+          
+          if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
           }
+          
+          // Retry comment fetching with exponential backoff
+          const commentsResponse = await retrySearchOperation(async () => {
+            const response = await fetch(commentsUrl, { headers });
+            if (!response.ok && response.status === 429) {
+              await this.delay(5000); // Wait longer for rate limits
+              throw new Error(`Rate limited: ${response.status}`);
+            }
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`);
+            }
+            return response;
+          }, 2, 1000, `Reddit comments: r/${subreddit}/${post.id}`).catch(() => null);
+
+          let topComments: string[] = [];
+          if (commentsResponse && commentsResponse.ok) {
+            const commentsData = await commentsResponse.json();
+            
+            // Extract top comments (limited to maxCommentsPerPost, default 10)
+            if (Array.isArray(commentsData) && commentsData[1]?.data?.children) {
+              topComments = commentsData[1].data.children
+                .slice(0, Math.min(maxCommentsPerPost, 100))
+                .filter((comment: any) => {
+                  const body = comment.data?.body;
+                  return body && body !== '[deleted]' && body !== '[removed]' && body.length > 20;
+                })
+                .sort((a: any, b: any) => {
+                  // Sort by score (upvotes - downvotes) to get most relevant
+                  const scoreA = (a.data?.score || 0) + (a.data?.ups || 0);
+                  const scoreB = (b.data?.score || 0) + (b.data?.ups || 0);
+                  return scoreB - scoreA;
+                })
+                .slice(0, Math.min(maxCommentsPerPost, 10)) // Limit to maxCommentsPerPost (capped at 10)
+                .map((comment: any) => {
+                  const body = comment.data?.body || '';
+                  const truncated = body.length > 200 ? body.substring(0, 200) + '...' : body;
+                  return truncated;
+                });
+            }
+          } else if (!commentsResponse) {
+            console.warn(`⚠️  [Reddit] Failed to fetch comments for post ${post.id} after retries`);
+          }
+
+          // Combine post content with top comments
+          let content = post.selftext || post.title;
+          if (topComments.length > 0) {
+            content += '\n\nTop comments:\n' + topComments.map(c => `• ${c}`).join('\n');
+          }
+          
+          // Truncate to first 1000 characters
+          if (content.length > 1000) {
+            content = content.substring(0, 1000);
+          }
+
+          results.push({
+            id: `reddit-${subreddit}-${post.id}`,
+            title: post.title,
+            content: content,
+            url: `https://reddit.com${post.permalink}`,
+            source: "reddit",
+            relevanceScore: Math.max(85 - results.length * 1, 70),
+            metadata: {
+              subreddit: `r/${subreddit}`,
+              upvotes: post.ups || 0,
+              comments: post.num_comments || 0,
+              created_utc: post.created_utc,
+              author: post.author || '[deleted]',
+              topCommentsIncluded: topComments.length,
+              postScore: post.score || 0
+            }
+          });
+
+        } catch (postError) {
+          const errorMsg = postError instanceof Error ? postError.message : String(postError);
+          console.warn(`⚠️  [Reddit] Error processing post ${post.id}: ${errorMsg}`);
+          // Still add the post without comments
+          let content = post.selftext || post.title;
+          if (content.length > 1000) {
+            content = content.substring(0, 1000);
+          }
+
+          results.push({
+            id: `reddit-${subreddit}-${post.id}`,
+            title: post.title,
+            content: content,
+            url: `https://reddit.com${post.permalink}`,
+            source: "reddit",
+            relevanceScore: Math.max(80 - results.length * 1, 65),
+            metadata: {
+              subreddit: `r/${subreddit}`,
+              upvotes: post.ups || 0,
+              comments: post.num_comments || 0,
+              created_utc: post.created_utc,
+              author: post.author || '[deleted]',
+              topCommentsIncluded: 0,
+              postScore: post.score || 0
+            }
+          });
         }
       }
-    } catch (error) {
-      console.error(`Error searching subreddit r/${subreddit}:`, error);
+      
+      console.log(`✅ [Reddit] Processed ${results.length} results from r/${subreddit}`);
     }
-
+    
     return results;
   }
 
@@ -1109,10 +1324,12 @@ export class RedditSearchService {
 }
 
 export class PerplexityService {
-  private apiKey?: string;
+  private llmService: any; // LiteLLMService instance
 
-  constructor() {
-    this.apiKey = process.env.PERPLEXITY_API_KEY;
+  constructor(llmService?: any) {
+    // Use provided LiteLLM service or create a new one
+    // Perplexity models are accessed through LiteLLM
+    this.llmService = llmService;
   }
 
   async deepSearch(query: string): Promise<{
@@ -1120,16 +1337,16 @@ export class PerplexityService {
     sources: SearchResult[];
     confidence: number;
   }> {
-    if (this.apiKey) {
-      return await this.realDeepSearch(query);
-    } else {
-      // For dev mode, just return empty results for deep sonar
+    if (!this.llmService) {
+      console.warn('LiteLLM service not provided to PerplexityService - returning empty result');
       return {
-        answer: '',
+        answer: 'LiteLLM service not configured for Perplexity',
         sources: [],
         confidence: 0
       };
     }
+    
+    return await this.realDeepSearch(query);
   }
 
   private async realDeepSearch(query: string): Promise<{
@@ -1138,55 +1355,93 @@ export class PerplexityService {
     confidence: number;
   }> {
     try {
-      const response = await fetch('https://api.perplexity.ai/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'llama-3.1-sonar-large-128k-online',
-          messages: [
-            {
-              role: 'system',
-              content: 'You are a research expert providing comprehensive, evidence-based analysis with source citations.'
-            },
-            {
-              role: 'user',
-              content: query
-            }
-          ],
-          max_tokens: 2000,
-          temperature: 0.2,
-          return_citations: true,
-          search_recency_filter: 'month'
-        })
-      });
+      console.log(`🔍 [Perplexity] Starting deep search with query: ${query.substring(0, 100)}...`);
+      
+      // Use LiteLLM to call Perplexity sonar-deep-research model
+      const model = 'perplexity/sonar-deep-research';
+      const systemPrompt = 'You are a research expert providing comprehensive, evidence-based analysis with source citations. Always include citations in your response.';
+      
+      const response = await this.llmService.generateCompletion(
+        query,
+        systemPrompt,
+        model
+      );
 
-      const data = await response.json();
-      const answer = data.choices[0].message.content;
-      const citations = data.citations || [];
+      const answer = response.response || '';
+      
+      // Extract citations from the response
+      // Perplexity through LiteLLM returns citations in the response.citations field
+      const citations: string[] = [];
+      
+      // First priority: citations from response.citations (direct from LiteLLM)
+      if (response.citations && Array.isArray(response.citations) && response.citations.length > 0) {
+        citations.push(...response.citations);
+        console.log(`📚 [Perplexity] Found ${citations.length} citations from LiteLLM response`);
+      }
+      
+      // Fallback: Try to extract citations from text patterns if not found in response
+      if (citations.length === 0) {
+        // Pattern 1: [1] https://url.com
+        const citationPattern1 = /\[(\d+)\]\s*(https?:\/\/[^\s\)\]]+)/g;
+        let match;
+        while ((match = citationPattern1.exec(answer)) !== null) {
+          citations.push(match[2]);
+        }
+        
+        // Pattern 2: References section at the end with URLs
+        const referencesMatch = answer.match(/References?:?\s*\n([\s\S]*)$/i);
+        if (referencesMatch) {
+          const referencesText = referencesMatch[1];
+          const urlPattern = /https?:\/\/[^\s\n\)\]]+/g;
+          const refUrls = referencesText.match(urlPattern) || [];
+          citations.push(...refUrls);
+        }
+        
+        // Pattern 3: Any URLs in the text (as last resort, but filter out common non-citation URLs)
+        const allUrls = answer.match(/https?:\/\/[^\s\)\]]+/g) || [];
+        const filteredUrls = allUrls.filter(url => {
+          // Filter out common non-citation URLs
+          const excludePatterns = [
+            /perplexity\.ai/,
+            /example\.com/,
+            /localhost/,
+            /127\.0\.0\.1/
+          ];
+          return !excludePatterns.some(pattern => pattern.test(url));
+        });
+        
+        if (filteredUrls.length > 0) {
+          citations.push(...filteredUrls.slice(0, 20)); // Limit to first 20 URLs
+        }
+      }
 
-      const sources: SearchResult[] = citations.map((citation: string, index: number) => ({
+      // Remove duplicates
+      const uniqueCitations = Array.from(new Set(citations));
+
+      const sources: SearchResult[] = uniqueCitations.map((citation: string, index: number) => ({
         id: `perplexity-${Date.now()}-${index}`,
         title: `Source ${index + 1}`,
         content: "",
         url: citation,
         source: "perplexity",
         relevanceScore: 85,
-        metadata: { citation }
+        metadata: { citation, extractedFrom: 'perplexity-response' }
       }));
+
+      console.log(`✅ [Perplexity] Deep search completed. Found ${sources.length} sources.`);
 
       return {
         answer,
         sources,
-        confidence: 0.85
+        confidence: sources.length > 0 ? 0.85 : 0.5
       };
-    } catch (error) {
-      console.error("Perplexity search error:", error);
-      // Return empty result on error - no mock data
+    } catch (error: any) {
+      console.error("❌ [Perplexity] Deep search error:", error);
+      const errorMsg = error?.message || String(error);
+      
+      // Return error details for debugging
       return {
-        answer: 'Error occurred during Perplexity search',
+        answer: `Error occurred during Perplexity deep search: ${errorMsg}. Please check LiteLLM configuration and Perplexity API key setup.`,
         sources: [],
         confidence: 0
       };

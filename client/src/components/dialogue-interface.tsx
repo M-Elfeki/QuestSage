@@ -7,7 +7,6 @@ import { AlignmentDialog } from "@/components/ui/alignment-dialog";
 
 interface DialogueInterfaceProps {
   sessionId: string | null;
-  isDevMode?: boolean;
   researchData?: any;
   agentConfigs?: any;
   successCriteria?: string[];
@@ -16,9 +15,9 @@ interface DialogueInterfaceProps {
   onComplete: (dialogueHistory: any[]) => void;
 }
 
-export default function DialogueInterface({ sessionId, isDevMode = true, researchData, agentConfigs, successCriteria = [], userIntent, status = 'active', onComplete }: DialogueInterfaceProps) {
+export default function DialogueInterface({ sessionId, researchData, agentConfigs, successCriteria = [], userIntent, status = 'active', onComplete }: DialogueInterfaceProps) {
   const [currentRound, setCurrentRound] = useState(1);
-  const [maxRounds] = useState(7);
+  const [maxRounds, setMaxRounds] = useState(3);
   const [dialogueHistory, setDialogueHistory] = useState<any[]>([]);
   const [lastSteering, setLastSteering] = useState<{ feedback: string[]; questions: string[] } | null>(null);
   const [successCriteriaStatus, setSuccessCriteriaStatus] = useState<Record<string, any>>({});
@@ -34,6 +33,25 @@ export default function DialogueInterface({ sessionId, isDevMode = true, researc
     enabled: !!sessionId
   });
 
+  // Fetch session config to get maxRounds
+  const { data: sessionData } = useQuery({
+    queryKey: ["/api/research-sessions", sessionId],
+    enabled: !!sessionId,
+    queryFn: async () => {
+      if (!sessionId) return null;
+      const apiBase = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000";
+      const response = await fetch(`${apiBase}/api/research-sessions/${sessionId}`);
+      if (!response.ok) return null;
+      return response.json();
+    }
+  });
+
+  useEffect(() => {
+    if (sessionData?.maxDialogueRounds) {
+      setMaxRounds(sessionData.maxDialogueRounds);
+    }
+  }, [sessionData]);
+
   const agentDialogueMutation = useMutation({
     mutationFn: (data: any) => 
       apiRequest("POST", "/api/agent-dialogue", data).then(res => res.json()),
@@ -42,11 +60,13 @@ export default function DialogueInterface({ sessionId, isDevMode = true, researc
       
       // Evaluate whether to continue following specification decision tree
       evaluateDialogueMutation.mutate({
+        sessionId: sessionId, // Include sessionId for model selection
         context: { 
           roundNumber: currentRound, 
           dialogueHistory: [...dialogueHistory, data.chatgpt, data.gemini],
           researchData: researchData || {},
-          successCriteria: successCriteria
+          successCriteria: successCriteria,
+          maxRounds: maxRounds
         }
       });
     }
@@ -71,8 +91,16 @@ export default function DialogueInterface({ sessionId, isDevMode = true, researc
       
       // Check alignment before continuing (as per spec requirement)
       if (evaluation.decision === "continue") {
+        // Check if we've reached max rounds
+        if (currentRound >= maxRounds) {
+          console.log(`Max rounds (${maxRounds}) reached. Concluding dialogue.`);
+          onComplete([...dialogueHistory]);
+          return;
+        }
+        
         try {
           const alignmentCheck = await apiRequest("POST", "/api/check-alignment", {
+            sessionId: sessionId, // Include sessionId for model selection
             conversationHistory: dialogueHistory,
             userIntent: userIntent || { query: "Research query" },
             currentRound
@@ -100,6 +128,12 @@ export default function DialogueInterface({ sessionId, isDevMode = true, researc
           
           // Only continue if alignment check passes
           if (alignmentCheck.recommendAction === 'proceed') {
+            // Double-check max rounds before incrementing
+            if (currentRound >= maxRounds) {
+              console.log(`Max rounds (${maxRounds}) reached. Concluding dialogue.`);
+              onComplete([...dialogueHistory]);
+              return;
+            }
             setCurrentRound(prev => prev + 1);
             setTimeout(() => {
               startDialogueRound();
@@ -120,7 +154,7 @@ export default function DialogueInterface({ sessionId, isDevMode = true, researc
   const startDialogueRound = () => {
     if (!sessionId) return;
 
-    const steeringData = lastSteering ? { ...lastSteering } : {};
+    const steeringData: { feedback?: string[]; questions?: string[] } = lastSteering ? { ...lastSteering } : {};
     
     // If user provided alignment feedback, add it to the steering
     if (userAlignmentAnswer) {

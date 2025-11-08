@@ -9,14 +9,18 @@ import SourceMetrics from "@/components/source-metrics";
 import AgentSelection from "@/components/agent-selection";
 import DialogueInterface from "@/components/dialogue-interface";
 import SynthesisResults from "@/components/synthesis-results";
+import ModelSelection from "@/components/model-selection";
 import { SettingsDialog } from "@/components/ui/settings-dialog";
 import { EssayDialog } from "@/components/ui/essay-dialog";
-import { ModeSelector } from "@/components/mode-selector";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
+
+const defaultApiBase = import.meta.env.DEV
+  ? "http://localhost:3000"
+  : (typeof window !== "undefined" ? window.location.origin : "");
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? defaultApiBase;
 
 export default function Quest() {
-  const [currentStage, setCurrentStage] = useState<string>("intentClarification");
+  const [currentStage, setCurrentStage] = useState<string>("modelSelection");
   const [completedStages, setCompletedStages] = useState<Set<string>>(new Set());
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [userQuery, setUserQuery] = useState<string>("");
@@ -24,10 +28,9 @@ export default function Quest() {
   const [researchProgress, setResearchProgress] = useState(0);
   const [researchData, setResearchData] = useState<any>(null);
   const [synthesisData, setSynthesisData] = useState<any>(null);
-  const [isDevMode, setIsDevMode] = useState<boolean>(true);
-  const [isModeUpdating, setIsModeUpdating] = useState<boolean>(false);
   const [agentSelection, setAgentSelection] = useState<any>(null);
   const [dialoguesForSynthesis, setDialoguesForSynthesis] = useState<any[]>([]);
+  const [modelSelectionComplete, setModelSelectionComplete] = useState(false);
 
   // Helper functions for stage management
   const getStageStatus = (stage: string) => {
@@ -45,48 +48,6 @@ export default function Quest() {
     setCurrentStage(nextStage);
   };
 
-  // Fetch current mode from server on component mount
-  useEffect(() => {
-    const fetchCurrentMode = async () => {
-      try {
-        const response = await fetch('http://localhost:3000/api/config');
-        const config = await response.json();
-        setIsDevMode(config.mode === 'dev');
-      } catch (error) {
-        console.error('Failed to fetch current mode:', error);
-      }
-    };
-    
-    fetchCurrentMode();
-  }, []);
-
-  const handleModeToggle = async (checked: boolean) => {
-    setIsModeUpdating(true);
-    try {
-      const response = await fetch('http://localhost:3000/api/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: checked ? 'dev' : 'prod' })
-      });
-      
-      if (response.ok) {
-        setIsDevMode(checked);
-        // Show success feedback
-        const modeName = checked ? 'Development' : 'Production';
-        console.log(`Successfully switched to ${modeName} mode`);
-      } else {
-        throw new Error('Failed to update mode');
-      }
-    } catch (error) {
-      console.error('Failed to update mode:', error);
-      // Revert the toggle if the update failed
-      setIsDevMode(!checked);
-      alert('Failed to update mode. Please try again.');
-    } finally {
-      setIsModeUpdating(false);
-    }
-  };
-
   return (
     <div className="font-inter bg-background min-h-screen">
       {/* Header */}
@@ -101,35 +62,6 @@ export default function Quest() {
               <span className="text-sm text-gray-500">Multi-Agent Research System</span>
             </div>
             <div className="flex items-center space-x-4">
-              {/* Dev/Prod Mode Toggle */}
-              <div className="flex items-center space-x-2">
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="mode-toggle"
-                    checked={isDevMode}
-                    onCheckedChange={handleModeToggle}
-                    disabled={isModeUpdating}
-                  />
-                  <Label htmlFor="mode-toggle" className="text-sm font-medium">
-                    {isModeUpdating ? 'Updating...' : (isDevMode ? 'Dev Mode' : 'Prod Mode')}
-                  </Label>
-                </div>
-                <div className="ml-2 text-xs text-gray-500">
-                  {isModeUpdating ? (
-                    <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded-full">
-                      Updating...
-                    </span>
-                  ) : isDevMode ? (
-                    <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
-                      Dummy Workflow
-                    </span>
-                  ) : (
-                    <span className="bg-green-100 text-green-800 px-2 py-1 rounded-full">
-                      Real APIs
-                    </span>
-                  )}
-                </div>
-              </div>
               <div className="flex items-center space-x-2 text-sm text-gray-600">
                 <div className="w-2 h-2 bg-success rounded-full"></div>
                 <span>System Ready</span>
@@ -147,11 +79,6 @@ export default function Quest() {
       </header>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {/* Mode Selector */}
-        <div className="mb-6">
-          <ModeSelector />
-        </div>
-
         {/* Progress Stepper */}
         <div className="mb-8">
           <ProcessStepper 
@@ -164,12 +91,28 @@ export default function Quest() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left Column - Query Input & Current Stage */}
           <div className="lg:col-span-2 space-y-6">
-            <QueryInput 
-              onQuerySubmit={(query) => {
-                setUserQuery(query);
-                setCurrentStage("intentClarification");
-              }}
-            />
+            {/* Stage 0: Model Selection */}
+            {(getStageStatus("modelSelection") !== "pending") && (
+              <div className="transition-all duration-500 ease-in-out">
+                <ModelSelection 
+                  sessionId={sessionId}
+                  onComplete={(newSessionId) => {
+                    setSessionId(newSessionId);
+                    setModelSelectionComplete(true);
+                    completeStage("modelSelection", "intentClarification");
+                  }}
+                />
+              </div>
+            )}
+
+            {modelSelectionComplete && (
+              <QueryInput 
+                onQuerySubmit={(query) => {
+                  setUserQuery(query);
+                  setCurrentStage("intentClarification");
+                }}
+              />
+            )}
 
             {/* Stage 1: Intent Clarification */}
             {(getStageStatus("intentClarification") !== "pending") && (
@@ -177,6 +120,7 @@ export default function Quest() {
                 <IntentClarification 
                   query={userQuery}
                   status={getStageStatus("intentClarification")}
+                  sessionId={sessionId}
                   onContinue={(sessionId, intent) => {
                     setSessionId(sessionId);
                     setClarifiedIntent(intent);
@@ -192,7 +136,6 @@ export default function Quest() {
                 <ResearchPipeline 
                   sessionId={sessionId}
                   clarifiedIntent={clarifiedIntent}
-                  isDevMode={isDevMode}
                   status={getStageStatus("research")}
                   onComplete={(data) => {
                     setResearchData(data);
@@ -223,7 +166,6 @@ export default function Quest() {
               <div className="transition-all duration-500 ease-in-out">
                 <DialogueInterface 
                   sessionId={sessionId}
-                  isDevMode={isDevMode}
                   researchData={researchData}
                   status={getStageStatus("dialogue")}
                   agentConfigs={agentSelection ? { chatgpt: agentSelection.chatgptConfig, gemini: agentSelection.geminiConfig } : undefined}
@@ -242,7 +184,6 @@ export default function Quest() {
               <div className="transition-all duration-500 ease-in-out">
                 <SynthesisResults 
                   sessionId={sessionId}
-                  isDevMode={isDevMode}
                   researchData={researchData}
                   dialogueHistory={dialoguesForSynthesis}
                   status={getStageStatus("synthesis")}

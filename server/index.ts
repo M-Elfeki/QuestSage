@@ -2,6 +2,68 @@ import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+
+// Get __dirname equivalent for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+/**
+ * Load litellm_config.env file if it exists
+ * This ensures config is loaded before any services initialize
+ */
+function loadLiteLLMConfig(): void {
+  try {
+    // Try multiple path resolutions to work in both dev and production
+    const possiblePaths = [
+      path.join(__dirname, '..', 'litellm_config.env'),        // From server/ (dev)
+      path.join(process.cwd(), 'litellm_config.env'),           // From project root
+      path.resolve(__dirname, '../litellm_config.env'),         // Alternative resolution
+      path.join(__dirname, '..', '..', 'litellm_config.env'),  // From dist/ (production)
+    ];
+    
+    let configPath: string | null = null;
+    for (const possiblePath of possiblePaths) {
+      if (fs.existsSync(possiblePath)) {
+        configPath = possiblePath;
+        console.log(`✅ Found litellm_config.env at: ${configPath}`);
+        break;
+      }
+    }
+    
+    if (!configPath) {
+      console.warn(`⚠️  litellm_config.env not found. Tried: ${possiblePaths.join(', ')}`);
+      return;
+    }
+    
+    const configContent = fs.readFileSync(configPath, 'utf-8');
+    const lines = configContent.split('\n');
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      // Skip empty lines and comments
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      
+      // Parse export KEY="value" format
+      const exportMatch = trimmed.match(/^export\s+(\w+)="([^"]+)"/);
+      if (exportMatch) {
+        const [, key, value] = exportMatch;
+        // Only set if not already in process.env (env vars take precedence)
+        if (!process.env[key]) {
+          process.env[key] = value;
+          console.log(`✅ Loaded ${key} from litellm_config.env`);
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('Could not load litellm_config.env (this is optional):', error);
+  }
+}
+
+// Load LiteLLM config file at module initialization (before any services)
+loadLiteLLMConfig();
 
 const app = express();
 
@@ -75,10 +137,10 @@ app.use((req, res, next) => {
   }
 
   // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
+  // Other ports are firewalled. Default to 3000 if not specified.
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || '5000', 10);
+  const port = parseInt(process.env.PORT || '3000', 10);
   server.listen({
     port,
     host: "0.0.0.0",

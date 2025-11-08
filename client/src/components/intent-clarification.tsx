@@ -8,9 +8,10 @@ interface IntentClarificationProps {
   onContinue: (sessionId: string, clarifiedIntent: any) => void;
   query?: string;
   status?: 'pending' | 'active' | 'completed';
+  sessionId?: string | null;
 }
 
-export default function IntentClarification({ onContinue, query, status = 'active' }: IntentClarificationProps) {
+export default function IntentClarification({ onContinue, query, status = 'active', sessionId }: IntentClarificationProps) {
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string, string[]>>({});
   const [additionalComments, setAdditionalComments] = useState<string>("");
   const [openTextAnswers, setOpenTextAnswers] = useState<Record<string, string>>({});
@@ -18,16 +19,22 @@ export default function IntentClarification({ onContinue, query, status = 'activ
   const effectiveQuery = query && query.trim().length > 0 ? query.trim() : null;
 
   const { data: clarification, isLoading } = useQuery({
-    queryKey: ["/api/clarify-intent", effectiveQuery],
+    queryKey: ["/api/clarify-intent", effectiveQuery, sessionId],
     queryFn: () => apiRequest("POST", "/api/clarify-intent", {
-      query: effectiveQuery
+      query: effectiveQuery,
+      sessionId: sessionId || undefined
     }).then(res => res.json()),
     enabled: !!effectiveQuery, // Only run query if we have an actual query
   });
 
   const createSessionMutation = useMutation({
-    mutationFn: (data: any) => 
-      apiRequest("POST", "/api/research-sessions", data).then(res => res.json()),
+    mutationFn: (data: any) => {
+      // If sessionId already exists, use it; otherwise create new session
+      if (sessionId) {
+        return apiRequest("PUT", `/api/research-sessions/${sessionId}`, data).then(() => ({ id: sessionId }));
+      }
+      return apiRequest("POST", "/api/research-sessions", data).then(res => res.json());
+    },
     onSuccess: (session) => {
       const intentData = {
         ...clarification,

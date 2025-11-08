@@ -196,6 +196,32 @@ class TempStorage {
     }
   }
 
+  async findSurfaceResearchFile(sessionId: string): Promise<string | null> {
+    try {
+      await this.ensureTempDir();
+      const files = await fs.readdir(this.tempDir);
+      
+      // Find the most recent surface research file for this session
+      const matchingFiles = files
+        .filter(file => file.startsWith(`surface-research-${sessionId}-`))
+        .map(file => ({
+          name: file,
+          path: path.join(this.tempDir, file),
+          timestamp: parseInt(file.match(/-(\d+)\.json$/)?.[1] || '0')
+        }))
+        .sort((a, b) => b.timestamp - a.timestamp); // Most recent first
+      
+      if (matchingFiles.length > 0) {
+        return matchingFiles[0].path;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error("Error finding surface research file:", error);
+      return null;
+    }
+  }
+
   async loadSurfaceSearchResults(filePath: string): Promise<any> {
     try {
       const data = await fs.readFile(filePath, 'utf-8');

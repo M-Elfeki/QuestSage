@@ -307,3 +307,9 @@ temp/
 surface-search.json
 .local/
 .local
+litellm_config.env
+reddit_config.env
+
+# Test directories
+temp_tests/
+tests/

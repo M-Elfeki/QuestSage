@@ -6,7 +6,6 @@ import ReactMarkdown from "react-markdown";
 
 interface SynthesisResultsProps {
   sessionId: string | null;
-  isDevMode?: boolean;
   researchData?: any;
   dialogueHistory?: any[];
   status?: 'pending' | 'active' | 'completed';
@@ -14,7 +13,7 @@ interface SynthesisResultsProps {
   onStartNewQuest?: () => void;
 }
 
-export default function SynthesisResults({ sessionId, isDevMode = true, researchData, dialogueHistory, status = 'active', onComplete, onStartNewQuest }: SynthesisResultsProps) {
+export default function SynthesisResults({ sessionId, researchData, dialogueHistory, status = 'active', onComplete, onStartNewQuest }: SynthesisResultsProps) {
   const synthesizeMutation = useMutation({
     mutationFn: (data: any) => 
       apiRequest("POST", "/api/synthesize", data).then(res => res.json()),
@@ -29,75 +28,83 @@ export default function SynthesisResults({ sessionId, isDevMode = true, research
 
   useEffect(() => {
     if (sessionId && !synthesis) {
-      if (isDevMode) {
-        synthesizeMutation.mutate({
-          surfaceResearchReport: researchData?.surfaceResearchReport || {},
-          deepResearchReport: researchData?.deepResearch || {},
-          dialogueHistory: dialogueHistory || [],
-          userContext: { mode: 'dev' }
-        });
-      } else {
-        synthesizeMutation.mutate({
-          surfaceResearchReport: researchData?.surfaceResearchReport,
-          deepResearchReport: researchData?.deepResearch?.deepResearchReport,
-          dialogueHistory: dialogueHistory || [],
-          userContext: { mode: 'prod' }
-        });
-      }
+      synthesizeMutation.mutate({
+        sessionId: sessionId, // Include sessionId for model selection
+        surfaceResearchReport: researchData?.surfaceResearchReport,
+        deepResearchReport: researchData?.deepResearch?.deepResearchReport,
+        dialogueHistory: dialogueHistory || [],
+        userContext: {}
+      });
     }
-  }, [sessionId, isDevMode, researchData, dialogueHistory]);
+  }, [sessionId, researchData, dialogueHistory]);
 
   const handleExportResults = () => {
     if (!synthesis) return;
     
-    // Create PDF content
-    const pdfContent = `
-# Impact of Large Language Models on Knowledge Work: A Comprehensive Analysis
+    // Format the actual synthesis data
+    const formatArray = (arr: any[] | undefined, prefix: string = '- ') => {
+      if (!Array.isArray(arr) || arr.length === 0) return '';
+      return arr.map(item => `${prefix}${typeof item === 'string' ? item : JSON.stringify(item)}`).join('\n');
+    };
+
+    const formatAppendix = (appendix: any) => {
+      if (!appendix || typeof appendix !== 'object') return '';
+      let result = '';
+      if (Array.isArray(appendix.surfaceHighlights) && appendix.surfaceHighlights.length > 0) {
+        result += '\n### Surface Research Highlights\n' + formatArray(appendix.surfaceHighlights);
+      }
+      if (Array.isArray(appendix.deepHighlights) && appendix.deepHighlights.length > 0) {
+        result += '\n### Deep Research Highlights\n' + formatArray(appendix.deepHighlights);
+      }
+      if (Array.isArray(appendix.dialogueConsensus) && appendix.dialogueConsensus.length > 0) {
+        result += '\n### Dialogue Consensus\n' + formatArray(appendix.dialogueConsensus);
+      }
+      if (Array.isArray(appendix.openQuestions) && appendix.openQuestions.length > 0) {
+        result += '\n### Open Questions\n' + formatArray(appendix.openQuestions);
+      }
+      if (Array.isArray(appendix.userConsiderations) && appendix.userConsiderations.length > 0) {
+        result += '\n### User Considerations\n' + formatArray(appendix.userConsiderations);
+      }
+      if (Array.isArray(appendix.alignmentNotes) && appendix.alignmentNotes.length > 0) {
+        result += '\n### Alignment Notes\n' + formatArray(appendix.alignmentNotes);
+      }
+      if (appendix.confidenceRationale) {
+        result += `\n### Confidence Rationale\n${appendix.confidenceRationale}`;
+      }
+      return result;
+    };
+
+    // Create markdown content from actual synthesis data
+    const pdfContent = `# Research Synthesis Report
+
+Generated: ${new Date().toLocaleString()}
 
 ## Executive Summary
-${synthesis.synthesis || synthesis.executiveSummary || 'Based on comprehensive research synthesis and expert agent dialogue, large language models (LLMs) will significantly transform knowledge work over the next 3-7 years, with productivity gains of 15-30% in routine cognitive tasks balanced against implementation challenges and workforce adaptation needs.'}
+
+${synthesis.executiveSummary || synthesis.synthesis || 'No executive summary available.'}
 
 ## Key Findings
 
-### Empirical Evidence Base
-- **Productivity Gains**: Consistent 15-30% improvements in writing, analysis, and coding tasks
-- **Adoption Timeline**: Current evidence suggests 3-7 year mainstream integration
-- **Quality Considerations**: Benefits strongest for routine tasks, quality control remains critical
-- **Sector Variation**: Legal, consulting, and content creation leading adoption
+${formatArray(synthesis.keyFindings, '- ') || 'No key findings available.'}
 
-### Strategic Analysis
-- **Economic Pressure**: Competitive advantages will accelerate adoption beyond comfortable timelines
-- **Market Forces**: Organizations may face forced adoption to maintain competitiveness
-- **Tipping Point Risk**: Gradual adoption may shift to rapid acceleration around 2025-2026
+${synthesis.recommendations && Array.isArray(synthesis.recommendations) && synthesis.recommendations.length > 0 ? `## Recommendations
 
-## Timeline Assessment
+${formatArray(synthesis.recommendations, '1. ')}` : ''}
 
-**Phase 1 (2024-2025)**: Early adopter advantage phase
-- Pilot implementations and proof-of-concept deployments
-- 15-25% of knowledge organizations begin systematic integration
-- Quality and governance frameworks development
+${synthesis.nextSteps && Array.isArray(synthesis.nextSteps) && synthesis.nextSteps.length > 0 ? `## Next Steps
 
-**Phase 2 (2025-2027)**: Mainstream adoption acceleration
-- Competitive pressures drive widespread implementation
-- 60-80% adoption in high-value use cases
-- Workforce adaptation and reskilling intensification
+${formatArray(synthesis.nextSteps, '1. ')}` : ''}
 
-**Phase 3 (2027-2030)**: Mature integration
-- LLM-native workflows become standard
-- New role categories emerge around human-AI collaboration
-- Policy and social adaptation responses mature
+${synthesis.risks && Array.isArray(synthesis.risks) && synthesis.risks.length > 0 ? `## Risks
 
-## Policy Recommendations
+${formatArray(synthesis.risks, '- ')}` : ''}
 
-1. **Immediate Action**: Begin workforce reskilling programs now, before displacement pressures peak
-2. **Flexible Preparation**: Develop policies for both gradual and accelerated adoption scenarios  
-3. **Quality Standards**: Establish governance frameworks for LLM integration in critical sectors
-4. **Social Safety Nets**: Strengthen transition support for affected knowledge workers
+${synthesis.confidence ? `## Confidence Level
 
-## Conclusion
+${synthesis.confidence}` : ''}
 
-The transformation of knowledge work by LLMs is not a question of "if" but "when" and "how fast." The evidence supports cautious optimism about productivity benefits, but economic realities may accelerate adoption beyond societally optimal timelines. Success depends on proactive policy responses that begin immediately, even as the full impact unfolds over the coming decade.
-    `;
+${synthesis.appendix ? `## Appendix${formatAppendix(synthesis.appendix)}` : ''}
+`;
 
     // Create blob and download
     const blob = new Blob([pdfContent], { type: 'text/plain' });
@@ -141,8 +148,111 @@ The transformation of knowledge work by LLMs is not a question of "if" but "when
 
   if (!synthesis) return null;
 
-  // Use the synthesis data properly - fallback to mock data if needed
-  const synthesisData = synthesis.synthesis || synthesis.executiveSummary || '';
+  // Format the full synthesis report for display
+  const formatSynthesisForDisplay = (syn: any): string => {
+    if (!syn) return '';
+    
+    // If there's already a formatted synthesis string, use it
+    if (syn.synthesis && typeof syn.synthesis === 'string') {
+      return syn.synthesis;
+    }
+    
+    // Otherwise, build formatted markdown from the structured data
+    let content = '';
+    
+    if (syn.executiveSummary) {
+      content += `## Executive Summary\n\n${syn.executiveSummary}\n\n`;
+    }
+    
+    if (Array.isArray(syn.keyFindings) && syn.keyFindings.length > 0) {
+      content += `## Key Findings\n\n`;
+      syn.keyFindings.forEach((finding: any) => {
+        const text = typeof finding === 'string' ? finding : JSON.stringify(finding);
+        content += `- ${text}\n`;
+      });
+      content += '\n';
+    }
+    
+    if (Array.isArray(syn.recommendations) && syn.recommendations.length > 0) {
+      content += `## Recommendations\n\n`;
+      syn.recommendations.forEach((rec: any, idx: number) => {
+        const text = typeof rec === 'string' ? rec : JSON.stringify(rec);
+        content += `${idx + 1}. ${text}\n`;
+      });
+      content += '\n';
+    }
+    
+    if (Array.isArray(syn.nextSteps) && syn.nextSteps.length > 0) {
+      content += `## Next Steps\n\n`;
+      syn.nextSteps.forEach((step: any, idx: number) => {
+        const text = typeof step === 'string' ? step : JSON.stringify(step);
+        content += `${idx + 1}. ${text}\n`;
+      });
+      content += '\n';
+    }
+    
+    if (Array.isArray(syn.risks) && syn.risks.length > 0) {
+      content += `## Risks\n\n`;
+      syn.risks.forEach((risk: any) => {
+        const text = typeof risk === 'string' ? risk : JSON.stringify(risk);
+        content += `- ${text}\n`;
+      });
+      content += '\n';
+    }
+    
+    if (syn.confidence) {
+      content += `## Confidence Level\n\n${syn.confidence}\n\n`;
+    }
+    
+    if (syn.appendix && typeof syn.appendix === 'object') {
+      content += `## Appendix\n\n`;
+      const app = syn.appendix;
+      
+      if (Array.isArray(app.surfaceHighlights) && app.surfaceHighlights.length > 0) {
+        content += `### Surface Research Highlights\n\n`;
+        app.surfaceHighlights.forEach((item: any) => {
+          const text = typeof item === 'string' ? item : JSON.stringify(item);
+          content += `- ${text}\n`;
+        });
+        content += '\n';
+      }
+      
+      if (Array.isArray(app.deepHighlights) && app.deepHighlights.length > 0) {
+        content += `### Deep Research Highlights\n\n`;
+        app.deepHighlights.forEach((item: any) => {
+          const text = typeof item === 'string' ? item : JSON.stringify(item);
+          content += `- ${text}\n`;
+        });
+        content += '\n';
+      }
+      
+      if (Array.isArray(app.dialogueConsensus) && app.dialogueConsensus.length > 0) {
+        content += `### Dialogue Consensus\n\n`;
+        app.dialogueConsensus.forEach((item: any) => {
+          const text = typeof item === 'string' ? item : JSON.stringify(item);
+          content += `- ${text}\n`;
+        });
+        content += '\n';
+      }
+      
+      if (Array.isArray(app.openQuestions) && app.openQuestions.length > 0) {
+        content += `### Open Questions\n\n`;
+        app.openQuestions.forEach((item: any) => {
+          const text = typeof item === 'string' ? item : JSON.stringify(item);
+          content += `- ${text}\n`;
+        });
+        content += '\n';
+      }
+      
+      if (app.confidenceRationale) {
+        content += `### Confidence Rationale\n\n${app.confidenceRationale}\n\n`;
+      }
+    }
+    
+    return content.trim() || syn.executiveSummary || '';
+  };
+
+  const synthesisData = formatSynthesisForDisplay(synthesis);
 
   // Completed state view with comprehensive results
   if (status === 'completed') {

@@ -1,111 +1,105 @@
 # QuestSage: Multi-Agent Research Synthesis System
 
-QuestSage is a sophisticated multi-agent research synthesis system that combines AI agents with comprehensive research capabilities to provide high-quality, evidence-based analysis on complex topics. The system operates in two distinct modes: **Development** and **Production**, each optimized for different use cases.
+QuestSage is a sophisticated multi-agent research synthesis system that combines AI agents with comprehensive research capabilities to provide high-quality, evidence-based analysis on complex topics. The system leverages **LiteLLM** for unified access to multiple AI models (OpenAI, Claude, Gemini) through a single API.
 
 ## 🎯 System Purpose
 
 QuestSage is designed to generate high-quality, research-backed insights by orchestrating multiple AI agents through a structured research pipeline. It's particularly effective for complex research questions that require:
 
-- **Multi-source evidence synthesis** (academic papers, industry reports, social media, deep research)
+- **Multi-source evidence synthesis** (academic papers, web search, Reddit discussions)
 - **Agent-based dialogue** for comprehensive analysis
 - **Evidence quality assessment** and contradiction detection
 - **Structured research workflows** with human-in-the-loop oversight
 
 ## 🏗️ Architecture Overview
 
-The system follows a **two-tier LLM architecture**:
+The system uses a **unified LLM architecture** powered by LiteLLM:
 
-- **Flash LLM**: Fast, cost-effective processing for initial analysis, fact extraction, and surface research
-- **Pro LLM**: High-quality, strategic analysis for complex reasoning, agent orchestration, and final synthesis
+- **LiteLLM Integration**: Single API for multiple AI providers (OpenAI, Claude, Gemini)
+- **Task-Specific Model Selection**: Configurable models for different research tasks
+- **TypeScript-Only Implementation**: Clean, modern codebase without Python dependencies
 
 ### Core Components
 
-- **Frontend**: React-based UI with real-time research progress tracking and modern Tailwind CSS design
-- **Backend**: Express.js server with modular service architecture and in-memory storage
-- **AI Services**: OpenAI, Google Gemini, Anthropic Claude integration with rate limiting
-- **Search Services**: Google Search, arXiv, Reddit, Perplexity Deep Search
-- **Testing**: Comprehensive Vitest test suite with mock API responses
-
-## 🔄 Development vs Production Modes
-
-### Development Mode (`dev`)
-- **Purpose**: Testing, development, and demonstration without external API costs
-- **Features**:
-  - Mock data generation for all research stages
-  - Simulated AI responses with realistic delays
-  - No external API calls or costs
-  - Perfect for development, testing, and demos
-- **Use Cases**: Development, testing, demonstrations, cost-free exploration
-
-### Production Mode (`prod`)
-- **Purpose**: Real research with live data and AI services
-- **Features**:
-  - Live API calls to search engines and AI services
-  - Real-time data collection and analysis
-  - Actual cost implications for API usage
-  - Production-grade research capabilities
-- **Use Cases**: Real research projects, client work, production deployments
+- **Frontend**: React-based UI with real-time research progress tracking
+- **Backend**: Express.js server with modular TypeScript services
+- **AI Services**: LiteLLM integration with configurable model selection
+- **Search Services**: Pure TypeScript implementations for web, arXiv, and Reddit
+- **Configuration**: Flexible JSON-based model configuration
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 - **Node.js 18+** 
 - **npm** or **yarn**
-- **No database required** - runs entirely in-memory
+- **LiteLLM API Key** (contact your organization for access)
 
 ### 1. **Clone and Install**
 ```bash
-git clone https://github.com/M-Elfeki/QuestSage.git
+git clone https://github.com/yourusername/QuestSage.git
 cd QuestSage
 npm install
 ```
 
 ### 2. **Environment Configuration**
-Copy the template and configure your API keys:
+
+QuestSage uses configuration files for sensitive credentials. These files are excluded from version control for security.
+
+**Required Configuration Files:**
+
+1. **LiteLLM Configuration** (`litellm_config.env`):
 ```bash
-cp config.template.env .env
+# Create litellm_config.env in the project root
+export LITELLM_API_KEY="your_litellm_api_key_here"
+export LITELLM_BASE_URL="https://litellm.ml-serving-internal.scale.com"
 ```
 
-**Required for Basic Functionality:**
+2. **Reddit API Configuration** (`reddit_config.env` - Optional but recommended):
 ```bash
-# Gemini API Key (required for dev mode)
-GEMINI_API_KEY=your_gemini_key_here
+# Copy the template and fill in your credentials
+cp reddit_config.env.template reddit_config.env
 
-# Application Mode
+# Edit reddit_config.env with your Reddit API credentials
+export REDDIT_CLIENT_ID="your_client_id_here"
+export REDDIT_CLIENT_SECRET="your_client_secret_here"
+export REDDIT_USER_AGENT="QuestSage/1.0 by /u/YOUR_USERNAME"
+```
+
+**Getting Reddit API Credentials:**
+1. Go to https://www.reddit.com/prefs/apps
+2. Click "create another app" or "create app"
+3. Fill in the form (app type: script)
+4. Copy the Client ID and Secret to `reddit_config.env`
+
+**Note:** Both `litellm_config.env` and `reddit_config.env` are automatically loaded by the application and are excluded from Git via `.gitignore`.
+
+**Note:** Perplexity deep research is integrated via LiteLLM - no separate API key needed. The system uses `perplexity/sonar-deep-research` model through your LiteLLM proxy.
+
+**Optional Environment Variables:**
+```bash
+# Application Settings
 NODE_ENV=development
 PORT=3000
-```
 
-**Required for Production Mode:**
-```bash
-# OpenAI Configuration
-OPENAI_API_KEY=your_openai_key_here
-OPENAI_MODEL=gpt-4o-mini
-
-# Google Gemini Configuration  
-GEMINI_API_KEY=your_gemini_key_here
-GEMINI_MODEL=gemini-flash-2.5
-
-# Anthropic Configuration
-ANTHROPIC_API_KEY=your_anthropic_key_here
-ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
-
-# Perplexity Configuration
-PERPLEXITY_API_KEY=your_perplexity_key_here
+# Search Configuration (optional - defaults provided)
+SEARCH_TERMS_LIMIT=10
+WEB_RESULTS_PER_TERM=10
+ARXIV_RESULTS_PER_TERM=10
+REDDIT_SUBREDDITS_LIMIT=10
+REDDIT_POSTS_PER_SUBREDDIT=10
+REDDIT_COMMENTS_PER_POST=10
 ```
 
 ### 3. **Start the Application**
 
-#### Development Mode (Recommended for first run)
 ```bash
 npm run dev
 ```
-- **Frontend**: http://localhost:5173 (Vite dev server)
+- **Frontend**: http://localhost:5173 (Vite dev server with hot reload)
 - **Backend**: http://localhost:3000 (Express API)
-- **Hot reloading** enabled
-- **Mock data** for testing without API costs
 
-#### Production Mode
+### Production Build
+
 ```bash
 # Build the application
 npm run build
@@ -113,42 +107,35 @@ npm run build
 # Start production server
 npm start
 ```
-- **Single port**: http://localhost:5000 (or your configured PORT)
-- **Optimized** for production
-- **Requires all API keys** to be configured
+- **Single port**: http://localhost:3000 (or your configured PORT)
 
-### 4. **Access the Application**
-Open your browser and navigate to:
-- **Dev Mode**: http://localhost:5173
-- **Prod Mode**: http://localhost:5000 (or your configured PORT)
+## 🤖 Available AI Models
 
-## 🔧 Current Features
+QuestSage uses LiteLLM to access multiple AI models. The available models are configured in `config.json`:
 
-### ✅ **Implemented & Working**
-- **Intent Clarification**: AI-powered query analysis and clarifying questions
-- **Multi-Source Research**: Web search, arXiv papers, Reddit discussions
-- **Fact Extraction**: AI-powered claim extraction with confidence scoring
-- **Agent Selection**: Dynamic AI agent configuration (ChatGPT & Gemini)
-- **Multi-Agent Dialogue**: Structured conversations between AI agents
-- **Research Synthesis**: Final report generation with evidence attribution
-- **Dynamic UI Metrics**: Real-time updates of research findings and source quality
-- **Markdown Rendering**: Beautiful formatting for agent dialogue responses
-- **Rate Limiting**: Intelligent API quota management with retry logic
-- **In-Memory Storage**: No database setup required
+### Tested & Working Models:
+- **OpenAI**: gpt-4o, gpt-4o-mini, gpt-5-nano
+- **Claude**: claude-opus-4-20250514, claude-sonnet-4-20250514
+- **Gemini**: gemini/gemini-2.5-flash, gemini/gemini-2.5-pro
+- **Perplexity**: perplexity/sonar-deep-research
 
-### 🔄 **UI/UX Features**
-- **Continuous Flow**: Completed stages remain visible in "frozen" state
-- **Smooth Transitions**: Progressive disclosure with aesthetic appeal
-- **Real-time Updates**: Dynamic metrics that update based on research data
-- **Responsive Design**: Modern Tailwind CSS with mobile-friendly layout
-- **Progress Tracking**: Visual indicators for each research stage
+### Default Model Assignments:
+All tasks default to `gpt-5-nano` unless overridden in the model selection UI or `config.json`:
+- **Intent Clarification**: gpt-5-nano
+- **Search Term Generation**: gpt-5-nano
+- **Fact Extraction**: gpt-5-nano (parallel for web, arXiv, Reddit)
+- **Research Analysis**: gpt-5-nano
+- **Surface Research Report**: gpt-5-nano
+- **Deep Research Query**: gpt-5-nano
+- **Deep Research Report**: gpt-5-nano
+- **Agent Selection**: gpt-5-nano
+- **Dialogue Evaluation**: gpt-5-nano
+- **Alignment Check**: gpt-5-nano
+- **Final Synthesis**: gpt-5-nano
+- **ChatGPT Debater**: gpt-5-nano (configurable)
+- **Gemini Debater**: gpt-5-nano (configurable)
 
-### 🧪 **Testing Infrastructure**
-- **Comprehensive Test Suite**: 10+ test files covering all major functionality
-- **Mock API Responses**: No external API calls during testing
-- **LLM Integration Tests**: Model-specific behavior validation
-- **Workflow Tests**: End-to-end pipeline testing
-- **Coverage Reporting**: Detailed test coverage analysis
+You can customize model assignments via the Model Selection UI or by editing `config.json`.
 
 ## 📁 Project Structure
 
@@ -158,207 +145,247 @@ QuestSage/
 │   ├── src/
 │   │   ├── components/    # UI components
 │   │   ├── pages/         # Page components
-│   │   ├── hooks/         # Custom React hooks
-│   │   └── lib/           # Frontend utilities
-│   ├── index.html         # Entry point
-│   └── vite.config.ts     # Vite configuration
+│   │   └── hooks/         # Custom React hooks
+│   └── index.html         # Entry point
 ├── server/                 # Express.js backend
 │   ├── services/          # Core services
-│   │   ├── llm.ts         # AI service integration
-│   │   ├── search.ts      # Search engine services
+│   │   ├── llm-litellm.ts # LiteLLM integration
+│   │   ├── search.ts      # Search services (web, arXiv, Reddit)
 │   │   ├── agents.ts      # AI agent management
-│   │   ├── rate-limiter.ts # API rate limiting
 │   │   └── config.ts      # Configuration management
 │   ├── routes.ts          # API endpoints
 │   └── index.ts           # Server entry point
-├── tests/                  # Comprehensive test suite
-│   ├── llm-integration.test.ts    # LLM service tests
-│   ├── model-specific.test.ts     # Model behavior tests
-│   ├── workflow-integration.test.ts # End-to-end tests
-│   ├── search tests (arxiv, reddit, web)
-│   └── README.md          # Test documentation
-├── docs/                   # Documentation
-│   ├── QUICK_SETUP.md     # Quick start guide
-│   ├── SETUP.md           # Detailed setup instructions
-│   ├── SPECS.md           # System specifications
-│   └── replit.md          # Replit deployment guide
-├── config.template.env     # Environment configuration template
-├── package.json            # Dependencies and scripts
-└── README.md               # This file
+├── tests/                  # Test files
+│   ├── test-all-models.ts # LLM model testing
+│   ├── test-search-services.ts # Search services testing
+│   └── test-reddit-auth.ts # Reddit authentication testing
+├── config.json            # LLM model configuration
+├── litellm_config.env     # LiteLLM credentials (not in git - create from template)
+├── reddit_config.env      # Reddit API credentials (not in git - create from template)
+├── reddit_config.env.template # Template for Reddit config
+├── package.json           # Dependencies
+├── tsconfig.json          # TypeScript configuration
+├── vite.config.ts         # Vite build configuration
+└── README.md             # This file
 ```
+
+## 🔧 Configuration
+
+### Model Configuration (`config.json`)
+```json
+{
+  "llmModels": {
+    "defaultModel": "gpt-4o-mini",
+    "taskModels": {
+      "clarifyIntent": {
+        "model": "claude-sonnet-4-20250514",
+        "reason": "Excellent at understanding nuanced queries"
+      },
+      // ... more task configurations
+    }
+  }
+}
+```
+
+### Environment Variables
+
+**Configuration Files (Recommended):**
+- `litellm_config.env`: LiteLLM API credentials (auto-loaded)
+- `reddit_config.env`: Reddit API credentials (auto-loaded)
+
+**Environment Variables (Alternative):**
+- `LITELLM_API_KEY`: LiteLLM API key (loaded from `litellm_config.env` or environment)
+- `LITELLM_BASE_URL`: LiteLLM base URL (loaded from `litellm_config.env` or environment)
+- `REDDIT_CLIENT_ID`: Reddit API client ID (loaded from `reddit_config.env` or environment)
+- `REDDIT_CLIENT_SECRET`: Reddit API client secret (loaded from `reddit_config.env` or environment)
+- `REDDIT_USER_AGENT`: Reddit User-Agent string (default: "QuestSage/1.0 by /u/questsage")
+- `DEFAULT_MODEL`: Override default model
+- `NODE_ENV`: development or production
+- `PORT`: Server port (default: 3000)
 
 ## 🧪 Running Tests
 
-### All Tests
+Test files are located in the `tests/` directory:
+
 ```bash
-npm test
+# Test all LLM models
+npx tsx tests/test-all-models.ts
+
+# Test search services (Reddit, Web, arXiv)
+npx tsx tests/test-search-services.ts
+
+# Test Reddit authentication
+npx tsx tests/test-reddit-auth.ts
 ```
-
-### Specific Test Categories
-```bash
-# LLM integration tests
-npm run test:llm
-
-# Search functionality tests
-npm run test:search
-
-# Integration tests
-npm run test:integration
-
-# Watch mode for development
-npm run test:watch
-
-# UI mode for visual testing
-npm run test:ui
-```
-
-### Test Coverage
-```bash
-npm test -- --coverage
-```
-
-## 📚 Documentation
-
-### **Quick Setup** (`docs/QUICK_SETUP.md`)
-- No database required setup
-- Fast development server startup
-- Basic configuration overview
-
-### **Detailed Setup** (`docs/SETUP.md`)
-- Complete environment configuration
-- API key setup instructions
-- Troubleshooting guide
-
-### **System Specifications** (`docs/SPECS.md`)
-- Detailed system architecture
-- API specifications
-- Workflow documentation
-
-### **Replit Deployment** (`docs/replit.md`)
-- Cloud deployment instructions
-- Replit-specific configuration
 
 ## 🔒 Security Features
 
-### **Environment Protection**
-- `.env` files excluded from Git
-- API keys never committed
-- Comprehensive `.gitignore` protection
-
-### **Rate Limiting**
-- Intelligent API quota management
-- Automatic retry logic for quota exceeded errors
-- Configurable rate limits per service
-
-### **Input Validation**
-- Request size limits (50MB)
-- CORS protection for development
-- Error handling and logging
+- **API Key Protection**: Credentials stored in config files (`litellm_config.env`, `reddit_config.env`), never committed to Git
+- **Git Ignore**: Both `litellm_config.env` and `reddit_config.env` are excluded via `.gitignore`
+- **Template Files**: `reddit_config.env.template` provides a safe template without credentials
+- **Rate Limiting**: Intelligent quota management
+- **Input Validation**: Request size limits and sanitization
+- **TypeScript**: Type safety throughout the codebase
 
 ## 🚨 Troubleshooting
 
-### **Common Issues**
+### Common Issues
 
-1. **Port Conflicts**
+1. **Missing API Key**
    ```bash
-   # Change port in .env
+   # Check if litellm_config.env exists and contains your key
+   cat litellm_config.env | grep LITELLM_API_KEY
+   # Or check environment variables
+   echo $LITELLM_API_KEY
+   ```
+
+2. **Reddit Search Not Working**
+   ```bash
+   # Check if reddit_config.env exists
+   cat reddit_config.env | grep REDDIT_CLIENT_ID
+   # Or copy the template
+   cp reddit_config.env.template reddit_config.env
+   # Then edit with your Reddit API credentials
+   ```
+
+3. **Port Conflicts**
+   ```bash
+   # Change port in .env or environment
    PORT=3001
    ```
 
-2. **API Key Errors**
+4. **Build Errors**
    ```bash
-   # Verify .env file exists
-   ls -la .env
-   
-   # Check API key format
-   cat .env | grep API_KEY
-   ```
-
-3. **Build Errors**
-   ```bash
-   # Clear dependencies
+   # Clean install
    rm -rf node_modules package-lock.json
    npm install
    ```
 
-4. **Test Failures**
-   ```bash
-   # Check test environment
-   npm run test:llm
-   
-   # Run with verbose output
-   npm test -- --reporter=verbose
-   ```
+## 🔄 Complete Workflow
 
-### **Debug Mode**
-Enable detailed logging:
-```bash
-DEBUG=questsage:*
-NODE_ENV=development
-npm run dev
-```
+QuestSage follows a structured 8-stage research pipeline:
 
-## 🚀 Development Workflow
+### Stage 1: Model Selection
+- User selects LLM models for each research task
+- Configurable models for: intent clarification, search term generation, fact extraction, analysis, synthesis, agent dialogue, etc.
+- User can also configure:
+  - Maximum dialogue rounds (default: 3, range: 1-15)
+  - ChatGPT debater model
+  - Gemini debater model
+- Settings are saved to the research session
 
-### **Adding New Features**
-1. **New Search Sources**: Implement in `server/services/search/`
-2. **New AI Providers**: Add to `server/services/llm.ts`
-3. **UI Components**: Create in `client/src/components/`
-4. **Tests**: Add corresponding test files in `tests/`
+### Stage 2: Query Input & Intent Clarification
+- User enters research query
+- System clarifies user intent using selected model
+- Returns structured clarification with requirements, constraints, and questions
+- User confirms or refines intent
 
-### **Code Quality**
-```bash
-# Type checking
-npm run check
+### Stage 3: Surface Research
+- **Search Term Generation**: Generates optimized search terms using selected model
+- **Parallel Multi-Source Search**:
+  - **Web Search**: DuckDuckGo (10 results per term)
+  - **arXiv**: Academic papers (10 results per term)
+  - **Reddit**: Community discussions (10 posts per subreddit, 10 comments per post)
+- **Fact Extraction**: Parallel extraction from each source type
+- **Analysis**: Comprehensive analysis of findings with contradiction detection
+- **Surface Research Report**: Structured report with key findings and evidence
 
-# Run tests
-npm test
+### Stage 4: Deep Research
+- **Query Generation**: Generates focused deep research query from surface analysis
+- **Perplexity Deep Search**: Uses `perplexity/sonar-deep-research` via LiteLLM
+  - Comprehensive research synthesis
+  - Automatic citation extraction (50+ sources per query)
+  - High-confidence evidence gathering
+- **Deep Research Report**: Advanced analysis with predictive insights
 
-# Build verification
-npm run build
-```
+### Stage 5: Agent Selection
+- User selects agent configurations:
+  - **ChatGPT Agent**: Approach, focus, evidence weighting, temporal perspective, risk assessment
+  - **Gemini Agent**: Complementary configuration for diverse perspectives
+- User defines success criteria for dialogue evaluation
+- System validates configurations with defaults
+
+### Stage 6: Agent Dialogue
+- **Multi-Round Debate**: ChatGPT and Gemini agents engage in structured dialogue
+- **Round-by-Round Process**:
+  1. Both agents generate responses based on research data
+  2. Dialogue evaluation assesses quality, convergence, and insights
+  3. Alignment check ensures dialogue stays on track
+  4. User can provide feedback if alignment issues detected
+  5. Continues until max rounds reached or evaluation concludes
+- **Context Management**: Compact research data and limited dialogue history to prevent context overflow
+- **Steering**: Evaluation provides feedback and questions to guide next round
+
+### Stage 7: Dialogue Evaluation & Alignment
+- **Evaluation**: Assesses dialogue quality, convergence, and whether to continue
+- **Alignment Check**: Verifies dialogue aligns with user intent
+  - **Proceed**: Continue dialogue
+  - **Clarify**: Request user input
+  - **Realign**: Major drift detected, stop dialogue
+- **Max Rounds Enforcement**: Automatically concludes when max rounds reached
+
+### Stage 8: Final Synthesis
+- **Comprehensive Synthesis**: Combines:
+  - Surface research report
+  - Deep research report
+  - Complete dialogue history
+  - User context
+- **Structured Output**:
+  - Executive summary
+  - Key findings
+  - Recommendations
+  - Next steps
+  - Risk assessment
+  - Confidence level
+  - Detailed appendix
+- **Export**: Markdown export of complete synthesis report
 
 ## 📊 System Capabilities
 
-### **Research Sources**
-- **Academic**: arXiv papers, peer-reviewed research
-- **Industry**: Google Search, industry reports  
-- **Social**: Reddit discussions, community insights
-- **Deep**: Perplexity AI for complex queries
+### Research Sources
+- **Web Search**: DuckDuckGo (10 results per query, 1000 chars per result)
+- **Academic**: arXiv papers (10 results per query, 1000 chars per result)
+- **Community**: Reddit discussions (10 posts/subreddit, 10 comments/post, 1000 chars per result)
+- **Deep Search**: Perplexity Sonar Deep Research via LiteLLM (50+ sources per query)
 
-### **AI Agents**
-- **ChatGPT**: Inductive reasoning, pattern recognition
-- **Gemini**: Strategic analysis, framework application
-- **Claude**: High-quality synthesis and evaluation
+### AI Agents
+- **Multiple Models**: Access to GPT-4, Claude, Gemini, Perplexity via LiteLLM
+- **Task Optimization**: Different models for different tasks
+- **Configurable**: Per-task model selection via UI or config.json
+- **Debater Models**: Separate model selection for ChatGPT and Gemini debaters
 
-### **Output Formats**
-- **Research Reports**: Structured analysis with evidence
-- **Agent Dialogues**: Multi-perspective discussions
-- **Fact Sheets**: Key findings with source attribution
-- **Dynamic Metrics**: Real-time research progress indicators
+### Output Formats
+- **Research Reports**: Structured analysis with citations
+- **Agent Dialogues**: Multi-perspective discussions with confidence scores
+- **Real-time Metrics**: Live research progress tracking
+- **Synthesis Reports**: Comprehensive markdown exports
 
 ## 🤝 Contributing
 
-1. **Fork** the repository
-2. **Create** a feature branch
-3. **Implement** your changes
-4. **Add tests** and documentation
-5. **Submit** a pull request
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
 
 ## 📄 License
 
 MIT License - see LICENSE file for details
 
-## 🆘 Support
-
-For issues, questions, or contributions:
-- **Create an issue** in the repository
-- **Check the documentation** in the `docs/` folder
-- **Review the test suite** for implementation examples
-- **Check the code comments** for detailed explanations
-
 ---
 
-**QuestSage** - Transforming complex research into actionable insights through AI-powered multi-agent synthesis.
+**QuestSage** - Transforming complex research into actionable insights through AI-powered synthesis.
 
-*Last Updated: December 2024 - Current Version: 1.0.0*
+## ✨ Key Features
+
+- **Multi-Source Research**: Web, arXiv, Reddit, and Perplexity deep search
+- **Configurable Model Selection**: Choose models for each task via UI
+- **Agent-Based Dialogue**: Multi-round debate between ChatGPT and Gemini agents
+- **Context Window Management**: Automatic data compaction to prevent overflow
+- **Citation Extraction**: Automatic source citation from Perplexity deep research
+- **Real-Time Progress**: Live tracking of research pipeline stages
+- **Structured Output**: Comprehensive synthesis reports with markdown export
+- **Alignment Checking**: Ensures dialogue stays aligned with user intent
+- **Max Rounds Control**: Configurable dialogue round limits (1-15)
+
+*Current Version: 2.1.0 - Complete Workflow Integration*

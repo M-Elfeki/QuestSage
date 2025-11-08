@@ -1,0 +1,130 @@
+
+{
+  "llmModels": {
+    "description": "LLM model configuration for QuestSage",
+    "lastUpdated": "2025-01-02",
+    "availableModels": {
+      "openai": [
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-4.1"
+      ],
+      "claude": [
+        "claude-opus-4-20250514",
+        "claude-sonnet-4-20250514"
+      ],
+      "gemini": [
+        "gemini/gemini-2.5-flash",
+        "gemini/gemini-2.5-pro"
+      ]
+    },
+    "modelProfiles": {
+      "fast": {
+        "model": "gemini/gemini-2.5-flash",
+        "description": "Fastest model for simple tasks",
+        "avgResponseTime": "1.2s"
+      },
+      "balanced": {
+        "model": "gemini/gemini-2.5-flash",
+        "description": "Good balance of speed and quality",
+        "avgResponseTime": "2.0s"
+      },
+      "quality": {
+        "model": "claude-sonnet-4-20250514",
+        "description": "High quality reasoning and analysis",
+        "avgResponseTime": "1.9s"
+      },
+      "premium": {
+        "model": "gpt-4o",
+        "description": "Best overall performance",
+        "avgResponseTime": "1.7s"
+      }
+    },
+    "defaultModel": "gemini/gemini-2.5-flash",
+    "taskModels": {
+      "clarifyIntent": {
+        "model": "gpt-5-nano",
+        "reason": "Excellent at understanding nuanced queries and asking clarifying questions"
+      },
+      "generateSynthesis": {
+        "model": "gpt-5-nano",
+        "reason": "Best at synthesizing multiple sources into coherent reports"
+      },
+      "generateCompletion": {
+        "model": "gpt-5-nano",
+        "reason": "General purpose completions with good cost-performance ratio"
+      },
+      "orchestrateResearch": {
+        "model": "gpt-5-nano",
+        "reason": "Strong at planning and coordinating complex research workflows"
+      },
+      "generateSearchTerms": {
+        "model": "gpt-5-nano",
+        "reason": "Fast and effective for simple term generation"
+      },
+      "extractFactsFromWebResults": {
+        "model": "gpt-5-nano",
+        "reason": "Good at structured data extraction with JSON output"
+      },
+      "extractFactsFromRedditResults": {
+        "model": "gpt-5-nano",
+        "reason": "Understands social media context and informal language"
+      },
+      "extractFactsFromArxivResults": {
+        "model": "gpt-5-nano",
+        "reason": "Better at understanding academic papers and technical content"
+      },
+      "generateSurfaceResearchReport": {
+        "model": "gpt-5-nano",
+        "reason": "Excellent at creating comprehensive, well-structured reports"
+      },
+      "analyzeResearchFindings": {
+        "model": "gpt-5-nano",
+        "reason": "Strong analytical capabilities for research assessment"
+      },
+      "selectAgents": {
+        "model": "gpt-5-nano",
+        "reason": "Fast decision making for agent selection"
+      },
+      "generateDeepResearchQuery": {
+        "model": "gpt-5-nano",
+        "reason": "Deep research query generation"
+      },
+      "generateDeepResearchReport": {
+        "model": "gpt-5-nano",
+        "reason": "Deep research report generation"
+      },
+      "checkAlignment": {
+        "model": "gpt-5-nano",
+        "reason": "Alignment checking for dialogue"
+      },
+      "evaluateDialogueRound": {
+        "model": "gpt-5-nano",
+        "reason": "Dialogue evaluation"
+      },
+      "synthesizeResults": {
+        "model": "gpt-5-nano",
+        "reason": "Final synthesis of results"
+      }
+    }
+  },
+  "overrides": {
+    "enabled": true,
+    "description": "Environment variables can override these settings",
+    "envMapping": {
+      "DEFAULT_MODEL": "defaultModel",
+      "FLASH_MODEL": "modelProfiles.fast.model",
+      "PRO_MODEL": "modelProfiles.premium.model"
+    }
+  },
+  "experimental": {
+    "enableModelFallback": true,
+    "fallbackChain": [
+      "gemini/gemini-2.5-flash",
+      "gpt-4o-mini",
+      "claude-sonnet-4-20250514"
+    ],
+    "enableModelRotation": false,
+    "rotationStrategy": "round-robin"
+  }
+}
